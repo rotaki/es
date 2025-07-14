@@ -1,0 +1,8 @@
+/target
+/test_storage
+/example_storage
+/test_runs
+/test_cleanup
+*.csv
+*.parquet
+*.txt
