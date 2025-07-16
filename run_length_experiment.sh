@@ -33,13 +33,12 @@ echo "==========================================================================
 echo "TEST 1: SF10 - 10GB Lineitem File" | tee -a "$LOG_FILE_SF10"
 echo "==================================================================================" | tee -a "$LOG_FILE_SF10"
 if [ -f "lineitem_sf10.csv" ]; then
-    echo "Testing with memory sizes: 32MB, 64MB, 128MB, 256MB, 512MB" | tee -a "$LOG_FILE_SF10"
-    echo "Expected runs: ~320, ~160, ~80, ~40, ~20" | tee -a "$LOG_FILE_SF10"
+    echo "Testing with memory sizes: 512MB, 1GB, 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF10"
     echo "" | tee -a "$LOG_FILE_SF10"
     
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
-        -m "32MB,64MB,128MB,256MB,512MB" \
+        -m "512MB,1GB,2GB,4GB,8GB" \
         lineitem_sf10.csv 2>&1 | tee -a "$LOG_FILE_SF10"
     
     echo "SF10 test completed" | tee -a "$SUMMARY_FILE"
@@ -59,13 +58,12 @@ echo "==========================================================================
 echo "TEST 2: SF100 - 100GB Lineitem File" | tee -a "$LOG_FILE_SF100"
 echo "==================================================================================" | tee -a "$LOG_FILE_SF100"
 if [ -f "lineitem_sf100.csv" ]; then
-    echo "Testing with memory sizes: 128MB, 256MB, 512MB, 1GB, 2GB" | tee -a "$LOG_FILE_SF100"
-    echo "Expected runs: ~800, ~400, ~200, ~100, ~50" | tee -a "$LOG_FILE_SF100"
+    echo "Testing with memory sizes: 5GB, 10GB, 20GB, 40GB, 80GB" | tee -a "$LOG_FILE_SF100"
     echo "" | tee -a "$LOG_FILE_SF100"
     
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
-        -m "128MB,256MB,512MB,1GB,2GB" \
+        -m "5GB,10GB,20GB,40GB,80GB" \
         lineitem_sf100.csv 2>&1 | tee -a "$LOG_FILE_SF100"
     
     echo "SF100 test completed" | tee -a "$SUMMARY_FILE"
@@ -75,55 +73,53 @@ fi
 
 echo -e "\n" | tee -a "$SUMMARY_FILE"
 
-# Test 3: SF1000 - 1TB file
-LOG_FILE_SF1000="${OUTPUT_DIR}/sf1000_experiment.log"
-echo "Running SF1000 experiment..." | tee -a "$SUMMARY_FILE"
-echo "Log file: $LOG_FILE_SF1000" | tee -a "$SUMMARY_FILE"
-echo "" | tee -a "$SUMMARY_FILE"
-
-echo "==================================================================================" | tee "$LOG_FILE_SF1000"
-echo "TEST 3: SF1000 - 1TB Lineitem File" | tee -a "$LOG_FILE_SF1000"
-echo "==================================================================================" | tee -a "$LOG_FILE_SF1000"
-if [ -f "lineitem_sf1000.csv" ]; then
-    echo "Testing with memory sizes: 512MB, 1GB, 2GB, 4GB" | tee -a "$LOG_FILE_SF1000"
-    echo "Expected runs: ~2000, ~1000, ~500, ~250" | tee -a "$LOG_FILE_SF1000"
-    echo "" | tee -a "$LOG_FILE_SF1000"
-    
-    cargo run --release --example lineitem_benchmark_cli -- \
-        -t $THREADS \
-        -m "512MB,1GB,2GB,4GB" \
-        lineitem_sf1000.csv 2>&1 | tee -a "$LOG_FILE_SF1000"
-    
-    echo "SF1000 test completed" | tee -a "$SUMMARY_FILE"
-else
-    echo "WARNING: lineitem_sf1000.csv not found, skipping SF1000 tests" | tee -a "$LOG_FILE_SF1000" | tee -a "$SUMMARY_FILE"
-fi
-
-echo -e "\n" | tee -a "$SUMMARY_FILE"
-
-# Test 4: SF10000 - 10TB file
-LOG_FILE_SF10000="${OUTPUT_DIR}/sf10000_experiment.log"
-echo "Running SF10000 experiment..." | tee -a "$SUMMARY_FILE"
-echo "Log file: $LOG_FILE_SF10000" | tee -a "$SUMMARY_FILE"
-echo "" | tee -a "$SUMMARY_FILE"
-
-echo "==================================================================================" | tee "$LOG_FILE_SF10000"
-echo "TEST 4: SF10000 - 10TB Lineitem File" | tee -a "$LOG_FILE_SF10000"
-echo "==================================================================================" | tee -a "$LOG_FILE_SF10000"
-if [ -f "lineitem_sf10000.csv" ]; then
-    echo "Testing with memory sizes: 1GB, 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF10000"
-    echo "Expected runs: ~1000, ~500, ~250, ~125" | tee -a "$LOG_FILE_SF10000"
-    echo "" | tee -a "$LOG_FILE_SF10000"
-    
-    cargo run --release --example lineitem_benchmark_cli -- \
-        -t $THREADS \
-        -m "1GB,2GB,4GB,8GB" \
-        lineitem_sf10000.csv 2>&1 | tee -a "$LOG_FILE_SF10000"
-    
-    echo "SF10000 test completed" | tee -a "$SUMMARY_FILE"
-else
-    echo "WARNING: lineitem_sf10000.csv not found, skipping SF10000 tests" | tee -a "$LOG_FILE_SF10000" | tee -a "$SUMMARY_FILE"
-fi
+# # Test 3: SF1000 - 1TB file
+# LOG_FILE_SF1000="${OUTPUT_DIR}/sf1000_experiment.log"
+# echo "Running SF1000 experiment..." | tee -a "$SUMMARY_FILE"
+# echo "Log file: $LOG_FILE_SF1000" | tee -a "$SUMMARY_FILE"
+# echo "" | tee -a "$SUMMARY_FILE"
+# 
+# echo "==================================================================================" | tee "$LOG_FILE_SF1000"
+# echo "TEST 3: SF1000 - 1TB Lineitem File" | tee -a "$LOG_FILE_SF1000"
+# echo "==================================================================================" | tee -a "$LOG_FILE_SF1000"
+# if [ -f "lineitem_sf1000.csv" ]; then
+#     echo "Testing with memory sizes: 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF1000"
+#     echo "" | tee -a "$LOG_FILE_SF1000"
+#     
+#     cargo run --release --example lineitem_benchmark_cli -- \
+#         -t $THREADS \
+#         -m "2GB,4GB,8GB" \
+#         lineitem_sf1000.csv 2>&1 | tee -a "$LOG_FILE_SF1000"
+#     
+#     echo "SF1000 test completed" | tee -a "$SUMMARY_FILE"
+# else
+#     echo "WARNING: lineitem_sf1000.csv not found, skipping SF1000 tests" | tee -a "$LOG_FILE_SF1000" | tee -a "$SUMMARY_FILE"
+# fi
+# 
+# echo -e "\n" | tee -a "$SUMMARY_FILE"
+# 
+# # Test 4: SF10000 - 10TB file
+# LOG_FILE_SF10000="${OUTPUT_DIR}/sf10000_experiment.log"
+# echo "Running SF10000 experiment..." | tee -a "$SUMMARY_FILE"
+# echo "Log file: $LOG_FILE_SF10000" | tee -a "$SUMMARY_FILE"
+# echo "" | tee -a "$SUMMARY_FILE"
+# 
+# echo "==================================================================================" | tee "$LOG_FILE_SF10000"
+# echo "TEST 4: SF10000 - 10TB Lineitem File" | tee -a "$LOG_FILE_SF10000"
+# echo "==================================================================================" | tee -a "$LOG_FILE_SF10000"
+# if [ -f "lineitem_sf10000.csv" ]; then
+#     echo "Testing with memory sizes: 1GB, 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF10000"
+#     echo "" | tee -a "$LOG_FILE_SF10000"
+#     
+#     cargo run --release --example lineitem_benchmark_cli -- \
+#         -t $THREADS \
+#         -m "1GB,2GB,4GB,8GB" \
+#         lineitem_sf10000.csv 2>&1 | tee -a "$LOG_FILE_SF10000"
+#     
+#     echo "SF10000 test completed" | tee -a "$SUMMARY_FILE"
+# else
+#     echo "WARNING: lineitem_sf10000.csv not found, skipping SF10000 tests" | tee -a "$LOG_FILE_SF10000" | tee -a "$SUMMARY_FILE"
+# fi
 
 # Final summary
 echo -e "\n" | tee -a "$SUMMARY_FILE"

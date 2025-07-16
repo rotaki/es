@@ -64,8 +64,10 @@ struct BenchmarkResult {
     throughput_meps: f64, // Million entries per second
     num_runs: usize,      // Number of runs generated
     // Aggregated IO stats
+    #[allow(dead_code)]
     read_ops: u64,
     read_bytes: u64,
+    #[allow(dead_code)]
     write_ops: u64,
     write_bytes: u64,
     // Detailed IO stats
