@@ -21,13 +21,20 @@ pub trait Run {
         lower_inc: &[u8],
         upper_exc: &[u8],
     ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>;
+    fn scan_range_with_io_tracker(
+        &self,
+        lower_inc: &[u8],
+        upper_exc: &[u8],
+        io_tracker: Option<IoStatsTracker>,
+    ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>;
 }
 
 // Input/Output traits
 pub trait SortInput {
-    fn partition(
+    fn create_parallel_scanners(
         &self,
-        num_partitions: usize,
+        num_scanners: usize,
+        io_tracker: Option<IoStatsTracker>,
     ) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>>;
 }
 
@@ -40,6 +47,10 @@ pub trait SortOutput {
         SortStats {
             num_runs: 0,
             runs_info: vec![],
+            run_generation_time_ms: None,
+            merge_time_ms: None,
+            run_generation_io_stats: None,
+            merge_io_stats: None,
         }
     }
 }
@@ -49,6 +60,10 @@ pub trait SortOutput {
 pub struct SortStats {
     pub num_runs: usize,
     pub runs_info: Vec<RunInfo>,
+    pub run_generation_time_ms: Option<u128>,
+    pub merge_time_ms: Option<u128>,
+    pub run_generation_io_stats: Option<IoStats>,
+    pub merge_io_stats: Option<IoStats>,
 }
 
 /// Information about a single run

@@ -5,6 +5,7 @@ use crate::aligned_reader::{AlignedReader, PAGE_SIZE};
 use crate::aligned_writer::AlignedWriter;
 #[cfg(test)]
 use crate::aligned_writer::WriteMode;
+use crate::io_stats::IoStatsTracker;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
@@ -50,11 +51,8 @@ impl RunImpl {
 
     pub fn finalize_write(&mut self) -> AlignedWriter {
         // Sort sparse index by file offset before finalizing
-        println!(
-            "[RunImpl] Finalizing write run with {} entries",
-            self.total_entries
-        );
-        self.sparse_index.sort_by_key(|entry| entry.file_offset);
+        self.sparse_index
+            .sort_unstable_by_key(|entry| entry.file_offset);
         self.writer.take().unwrap()
     }
 
@@ -150,8 +148,21 @@ impl super::Run for RunImpl {
         lower_inc: &[u8],
         upper_exc: &[u8],
     ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send> {
-        // Open for reading with direct I/O
-        let mut reader = AlignedReader::new(&self.path, 64 * 1024).unwrap();
+        self.scan_range_with_io_tracker(lower_inc, upper_exc, None)
+    }
+
+    fn scan_range_with_io_tracker(
+        &self,
+        lower_inc: &[u8],
+        upper_exc: &[u8],
+        io_tracker: Option<IoStatsTracker>,
+    ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send> {
+        // Open for reading with direct I/O, optionally with tracker
+        let mut reader = if let Some(tracker) = io_tracker {
+            AlignedReader::new_with_tracker(&self.path, 0, 64 * 1024, Some(tracker)).unwrap()
+        } else {
+            AlignedReader::new(&self.path, 64 * 1024).unwrap()
+        };
 
         // Use sparse index to seek to a good starting position
         // Since runs contain sorted data, we can safely skip ahead

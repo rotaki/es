@@ -10,14 +10,14 @@ The library includes benchmark utilities for testing external sorting performanc
 
 To generate TPC-H lineitem data for benchmarking, you can use [tpchgen-rs](https://github.com/clflushopt/tpchgen-rs):
 
-### CSV Lineitem Benchmark
+### Unified Lineitem Benchmark
 
-The CSV benchmark tool allows you to test external sorting performance on TPC-H lineitem data in CSV format.
+The integrated benchmark tool supports both CSV and Parquet formats, automatically detecting the format based on file extension (.csv or .parquet).
 
 #### Usage
 
 ```bash
-cargo run --release --example csv_lineitem_benchmark_cli -- [OPTIONS] <CSV_FILE>
+cargo run --release --example lineitem_benchmark_cli -- [OPTIONS] <FILE>
 ```
 
 #### Options
@@ -27,9 +27,9 @@ cargo run --release --example csv_lineitem_benchmark_cli -- [OPTIONS] <CSV_FILE>
 - `-t, --threads <LIST>` - Comma-separated thread counts to test (default: 1,2,4,8,16,32)
 - `-m, --memory <LIST>` - Comma-separated memory sizes (e.g., 1GB,2GB,4GB or 1024,2048,4096)
   - Default: 1GB,2GB,4GB,8GB,16GB,32GB
-- `-d, --delimiter <CHAR>` - CSV delimiter character (default: |)
 - `-b, --buffer-size <KB>` - Direct I/O buffer size in KB (default: 64)
-- `--headers` - CSV file has headers
+- `-d, --delimiter <CHAR>` - CSV delimiter character (default: ,) - ignored for Parquet files
+- `--headers` - CSV file has headers - ignored for Parquet files
 - `--help` - Show help message
 
 #### TPC-H Lineitem Column Indices
@@ -55,66 +55,59 @@ cargo run --release --example csv_lineitem_benchmark_cli -- [OPTIONS] <CSV_FILE>
 
 #### Examples
 
+##### CSV Files
+
 ```bash
 # Sort by orderkey and linenumber (default)
-cargo run --release --example csv_lineitem_benchmark_cli -- lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- lineitem.csv
 
 # Sort by shipdate
-cargo run --release --example csv_lineitem_benchmark_cli -- -k 10 -v 0,3 lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- -k 10 -v 0,3 lineitem.csv
 
 # Sort by extended price with custom thread counts
-cargo run --release --example csv_lineitem_benchmark_cli -- -k 5 -v 0,3,10 -t 1,4,8,16 lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- -k 5 -v 0,3,10 -t 1,4,8,16 lineitem.csv
 
 # Test with specific memory sizes
-cargo run --release --example csv_lineitem_benchmark_cli -- -m 2GB,4GB,8GB lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- -m 2GB,4GB,8GB lineitem.csv
 
 # Custom thread and memory combinations
-cargo run --release --example csv_lineitem_benchmark_cli -- -t 1,8,32 -m 1024,8192,32768 lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- -t 1,8,32 -m 1024,8192,32768 lineitem.csv
 
 # Use pipe delimiter (TPC-H default)
-cargo run --release --example csv_lineitem_benchmark_cli -- -d "|" lineitem.csv
+cargo run --release --example lineitem_benchmark_cli -- -d "|" lineitem.csv
 ```
 
-### Parquet Lineitem Benchmark
-
-The Parquet benchmark tool provides similar functionality for Parquet format files.
-
-#### Usage
-
-```bash
-cargo run --release --example parquet_lineitem_benchmark_cli -- [OPTIONS] <PARQUET_FILE>
-```
-
-#### Examples
+##### Parquet Files
 
 ```bash
 # Sort by orderkey and linenumber (default)
-cargo run --release --example parquet_lineitem_benchmark_cli -- lineitem.parquet
+cargo run --release --example lineitem_benchmark_cli -- lineitem.parquet
 
 # Sort by shipdate
-cargo run --release --example parquet_lineitem_benchmark_cli -- -k 10 -v 0,3 lineitem.parquet
+cargo run --release --example lineitem_benchmark_cli -- -k 10 -v 0,3 lineitem.parquet
 
 # Sort by extended price with custom thread counts
-cargo run --release --example parquet_lineitem_benchmark_cli -- -k 5 -v 0,3,10 -t 1,4,8,16 lineitem.parquet
+cargo run --release --example lineitem_benchmark_cli -- -k 5 -v 0,3,10 -t 1,4,8,16 lineitem.parquet
 
 # Test with specific memory sizes
-cargo run --release --example parquet_lineitem_benchmark_cli -- -m 2GB,4GB,8GB lineitem.parquet
+cargo run --release --example lineitem_benchmark_cli -- -m 2GB,4GB,8GB lineitem.parquet
 
 # Custom thread and memory combinations
-cargo run --release --example parquet_lineitem_benchmark_cli -- -t 1,8,32 -m 1024,8192,32768 lineitem.parquet
+cargo run --release --example lineitem_benchmark_cli -- -t 1,8,32 -m 1024,8192,32768 lineitem.parquet
 ```
 
 ### Benchmark Output
 
-Both benchmark tools provide detailed performance metrics including:
+The benchmark tool provides detailed performance metrics including:
 
 - Sort time and throughput (million entries per second)
 - Number of runs generated during external sorting
 - I/O statistics (read/write operations and bytes)
 - Speedup analysis for different thread counts
 - First and last sorted entries for verification
+- Human-readable memory sizes (GB, MB, KB) in all output
 
-The benchmarks automatically test different combinations of thread counts and memory sizes, making it easy to find the optimal configuration for your hardware.
+The benchmark automatically tests different combinations of thread counts and memory sizes, making it easy to find the optimal configuration for your hardware.
 
 ### Performance Tips
 

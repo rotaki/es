@@ -40,7 +40,6 @@ pub struct ParquetInputDirect {
     config: ParquetDirectConfig,
     num_rows: usize,
     num_row_groups: usize,
-    pub io_stats: Option<IoStatsTracker>,
 }
 
 impl ParquetInputDirect {
@@ -97,19 +96,12 @@ impl ParquetInputDirect {
             config,
             num_rows,
             num_row_groups,
-            io_stats: None,
         })
     }
 
     /// Create with default configuration
     pub fn new_default(path: impl AsRef<Path>) -> Result<Self, String> {
         Self::new(path, ParquetDirectConfig::default())
-    }
-
-    /// Enable I/O statistics tracking
-    pub fn with_io_stats(mut self) -> Self {
-        self.io_stats = Some(IoStatsTracker::new());
-        self
     }
 
     /// Get the number of rows
@@ -124,27 +116,28 @@ impl ParquetInputDirect {
 }
 
 impl SortInput for ParquetInputDirect {
-    fn partition(
+    fn create_parallel_scanners(
         &self,
-        num_partitions: usize,
+        num_scanners: usize,
+        io_tracker: Option<IoStatsTracker>,
     ) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
-        if num_partitions == 0 || self.is_empty() {
+        if num_scanners == 0 || self.is_empty() {
             return vec![];
         }
 
-        // Simple partitioning: divide row groups among partitions
-        let mut partitions = Vec::new();
-        let groups_per_partition = (self.num_row_groups + num_partitions - 1) / num_partitions;
+        // Simple partitioning: divide row groups among scanners
+        let mut scanners = Vec::new();
+        let groups_per_scanner = (self.num_row_groups + num_scanners - 1) / num_scanners;
 
-        for i in 0..num_partitions {
-            let start_group = i * groups_per_partition;
-            let end_group = ((i + 1) * groups_per_partition).min(self.num_row_groups);
+        for i in 0..num_scanners {
+            let start_group = i * groups_per_scanner;
+            let end_group = ((i + 1) * groups_per_scanner).min(self.num_row_groups);
 
             if start_group >= self.num_row_groups {
                 break;
             }
 
-            let partition = ParquetPartitionDirect {
+            let scanner = ParquetPartitionDirect {
                 path: Arc::clone(&self.path),
                 config: self.config.clone(),
                 start_row_group: start_group,
@@ -152,14 +145,13 @@ impl SortInput for ParquetInputDirect {
                 current_batch: None,
                 current_row: 0,
                 reader: None,
-                io_stats: self.io_stats.clone(),
+                io_stats: io_tracker.clone(),
             };
 
-            partitions
-                .push(Box::new(partition) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
+            scanners.push(Box::new(scanner) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
         }
 
-        partitions
+        scanners
     }
 }
 
@@ -294,7 +286,9 @@ fn extract_bytes_from_batch(batch: &RecordBatch, column: usize, row: usize) -> O
             // Date32 is days since epoch
             let date_array = array.as_primitive::<arrow::datatypes::Date32Type>();
             let value = date_array.value(row);
-            Some(i32_to_order_preserving_bytes(value).to_vec())
+            // Convert to since CE (Jan 1, Year 1)
+            let days_since_ce = unix_epoch_to_ce_days(value);
+            Some(i32_to_order_preserving_bytes(days_since_ce).to_vec())
         }
         DataType::Decimal128(_, _) => {
             let decimal_array = array.as_primitive::<arrow::datatypes::Decimal128Type>();
@@ -304,6 +298,12 @@ fn extract_bytes_from_batch(batch: &RecordBatch, column: usize, row: usize) -> O
         _ => None,
     }
 }
+
+pub fn unix_epoch_to_ce_days(unix_epoch_days: i32) -> i32 {
+    // Convert Unix epoch days to CE days
+    unix_epoch_days + 719_163 // 719_163 is days from 1970-01-01 to 0001-01-01
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,7 +456,7 @@ mod tests {
 
         // Test partitioning with different partition counts
         for num_partitions in [1, 2, 4, 8, 16] {
-            let partitions = input.partition(num_partitions);
+            let partitions = input.create_parallel_scanners(num_partitions, None);
             assert!(partitions.len() <= num_partitions);
             assert!(partitions.len() > 0);
 
@@ -545,7 +545,7 @@ mod tests {
         assert_eq!(input.len(), 5);
 
         // Collect all entries
-        let partitions = input.partition(1);
+        let partitions = input.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 5);
 
@@ -590,7 +590,7 @@ mod tests {
         assert!(input.is_empty());
 
         // Test partitioning
-        let partitions = input.partition(4);
+        let partitions = input.create_parallel_scanners(4, None);
         assert_eq!(partitions.len(), 0);
 
         std::fs::remove_file(&path).unwrap();
@@ -684,7 +684,7 @@ mod tests {
         .unwrap();
         assert_eq!(input.len(), 100);
 
-        let partitions = input.partition(1);
+        let partitions = input.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 100);
 
@@ -711,7 +711,7 @@ mod tests {
         .unwrap();
 
         // Get multiple partitions
-        let partitions = input.partition(4);
+        let partitions = input.create_parallel_scanners(4, None);
         assert_eq!(partitions.len(), 4);
 
         // Process partitions in parallel
@@ -864,7 +864,7 @@ mod tests {
         .unwrap();
         assert_eq!(input.len(), 100);
 
-        let partitions = input.partition(1);
+        let partitions = input.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
 
         // Verify integer keys are encoded as order-preserving bytes
@@ -918,14 +918,15 @@ mod tests {
         .unwrap();
         assert_eq!(input.len(), 50);
 
-        let partitions = input.partition(1);
+        let partitions = input.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 50);
 
         // Verify Date32 keys are encoded as order-preserving bytes
         for i in 0..50 {
             let expected_date = base_date + i;
-            let expected_key = i32_to_order_preserving_bytes(expected_date).to_vec();
+            let expected_key =
+                i32_to_order_preserving_bytes(unix_epoch_to_ce_days(expected_date)).to_vec();
             let found = entries.iter().any(|(k, _)| k == &expected_key);
             assert!(found, "Missing key for date {}", expected_date);
         }
@@ -963,12 +964,17 @@ mod tests {
             i32_from_order_preserving_bytes(sorted_entries[0].0[0..4].try_into().unwrap());
         let last_date =
             i32_from_order_preserving_bytes(sorted_entries[49].0[0..4].try_into().unwrap());
-        assert_eq!(first_date, base_date, "First date should be {}", base_date);
+        assert_eq!(
+            first_date,
+            unix_epoch_to_ce_days(base_date),
+            "First date should be {}",
+            unix_epoch_to_ce_days(base_date)
+        );
         assert_eq!(
             last_date,
-            base_date + 49,
+            unix_epoch_to_ce_days(base_date + 49),
             "Last date should be {}",
-            base_date + 49
+            unix_epoch_to_ce_days(base_date + 49)
         );
 
         std::fs::remove_file(&path).unwrap();
@@ -1017,7 +1023,7 @@ mod tests {
         .unwrap();
         assert_eq!(input.len(), 50);
 
-        let partitions = input.partition(1);
+        let partitions = input.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 50);
 
@@ -1130,7 +1136,13 @@ mod tests {
             .iter()
             .map(|(k, _)| i32_from_order_preserving_bytes(k[0..4].try_into().unwrap()))
             .collect();
-        assert_eq!(dates, vec![19000, 19000, 19001, 19001, 19002]);
+        assert_eq!(
+            dates,
+            vec![19000, 19000, 19001, 19001, 19002]
+                .into_iter()
+                .map(|d| unix_epoch_to_ce_days(d))
+                .collect::<Vec<_>>()
+        );
 
         // Test 2: Sort by Decimal128 (column 2)
         let input2 = ParquetInputDirect::new(
@@ -1163,7 +1175,7 @@ mod tests {
         )
         .unwrap();
 
-        let partitions = input3.partition(1);
+        let partitions = input3.create_parallel_scanners(1, None);
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 5);
 
@@ -1250,7 +1262,7 @@ mod tests {
         );
         assert_eq!(
             extract_bytes_from_batch(&batch, 8, 0),
-            Some(i32_to_order_preserving_bytes(19000).to_vec())
+            Some(i32_to_order_preserving_bytes(unix_epoch_to_ce_days(19000)).to_vec())
         );
         assert_eq!(
             extract_bytes_from_batch(&batch, 9, 0),

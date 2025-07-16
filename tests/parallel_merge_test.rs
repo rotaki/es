@@ -28,7 +28,7 @@ fn test_parallel_merge_with_multiple_threads() {
 
     // Shuffle to ensure runs contain mixed data
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     println!(
@@ -86,7 +86,7 @@ fn test_parallel_merge_boundary_conditions() {
 
     // Shuffle within groups to create multiple runs
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     let input = Input { data };

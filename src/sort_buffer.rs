@@ -22,7 +22,7 @@ impl super::SortBuffer for SortBufferImpl {
     }
 
     fn append(&mut self, key: &[u8], value: &[u8]) -> bool {
-        let entry_size = key.len() + value.len() + 32; // Include some overhead
+        let entry_size = key.len() + value.len() + std::mem::size_of::<u32>() * 2; // key and value lengths
 
         if self.memory_used + entry_size > self.memory_limit {
             return false;

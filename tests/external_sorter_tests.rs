@@ -125,7 +125,7 @@ fn test_duplicate_keys() {
 
     // Shuffle to make it interesting
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     let input = Input { data };
@@ -173,7 +173,7 @@ fn test_variable_sized_entries() {
 
     // Shuffle
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     let input = Input { data };

@@ -12,7 +12,7 @@
 //!   -h, --help                   Show this help message
 
 use crossbeam::channel;
-use es::{ParquetDirectConfig, ParquetInputDirect, SortInput};
+use es::{IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::env;
 use std::fs::File;
@@ -120,20 +120,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             buffer_size,
         };
 
-        let parquet_direct = ParquetInputDirect::new(filename, parquet_config)?.with_io_stats();
+        let parquet_direct = ParquetInputDirect::new(filename, parquet_config)?;
 
-        // Clone io_stats to get final stats after benchmark
-        let final_io_stats = parquet_direct.io_stats.clone().unwrap();
+        // Create I/O tracker
+        let io_tracker = IoStatsTracker::new();
 
         let (elapsed, total_rows, total_bytes, _actual_partitions) =
-            benchmark_thread_scaling(parquet_direct, num_threads);
+            benchmark_thread_scaling(parquet_direct, num_threads, &io_tracker);
 
         let duration = elapsed.as_secs_f64();
         let rows_per_sec_millions = (total_rows as f64 / elapsed.as_secs_f64()) / 1_000_000.0;
         let mb_per_sec = (total_bytes as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64();
 
         // Get I/O statistics
-        let (io_ops, io_bytes) = final_io_stats.get_read_stats();
+        let (io_ops, io_bytes) = io_tracker.get_read_stats();
         let io_mb_per_sec = (io_bytes as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64();
         let iops = io_ops as f64 / elapsed.as_secs_f64();
 
@@ -177,10 +177,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn benchmark_thread_scaling(
     parquet_direct: ParquetInputDirect,
     num_threads: usize,
+    io_tracker: &IoStatsTracker,
 ) -> (std::time::Duration, usize, usize, usize) {
     let start = Instant::now();
 
-    let partitions = parquet_direct.partition(num_threads);
+    let partitions = parquet_direct.create_parallel_scanners(num_threads, Some(io_tracker.clone()));
     let actual_partitions = partitions.len();
 
     let (sender, receiver) = channel::unbounded();

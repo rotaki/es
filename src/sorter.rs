@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 use crate::aligned_writer::{AlignedWriter, WriteMode};
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;
-use crate::{Run, RunInfo, SortBuffer, SortInput, SortOutput, SortStats, Sorter};
+use crate::{IoStatsTracker, Run, RunInfo, SortBuffer, SortInput, SortOutput, SortStats, Sorter};
 
 /// Compute partition points for parallel merging
 fn compute_partition_points(runs: &[RunImpl], num_partitions: usize) -> Vec<Vec<u8>> {
@@ -24,8 +25,6 @@ fn compute_partition_points(runs: &[RunImpl], num_partitions: usize) -> Vec<Vec<
                 .map(|(key, _file_offset, _entry_number)| key),
         );
     }
-
-    println!("Collected {} samples from runs", all_samples.len());
 
     // Remove empty keys from samples as they don't make good partition points
     all_samples.retain(|k| !k.is_empty());
@@ -55,29 +54,34 @@ pub struct Input {
 }
 
 impl SortInput for Input {
-    fn partition(&self, n: usize) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
+    fn create_parallel_scanners(
+        &self,
+        num_scanners: usize,
+        _io_tracker: Option<IoStatsTracker>,
+    ) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
         if self.data.is_empty() {
             return vec![];
         }
 
-        let chunk_size = (self.data.len() + n - 1) / n;
-        let mut partitions = Vec::new();
+        let chunk_size = (self.data.len() + num_scanners - 1) / num_scanners;
+        let mut scanners = Vec::new();
 
-        // Clone the data for each partition since we can't move out of &self
+        // Clone the data for each scanner since we can't move out of &self
         let data = self.data.clone();
         for chunk in data.into_iter().collect::<Vec<_>>().chunks(chunk_size) {
             let chunk_vec = chunk.to_vec();
-            partitions.push(Box::new(chunk_vec.into_iter())
+            scanners.push(Box::new(chunk_vec.into_iter())
                 as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
         }
 
-        partitions
+        scanners
     }
 }
 
 // Output implementation that materializes all data
 pub struct Output {
     pub data: Vec<(Vec<u8>, Vec<u8>)>,
+    pub stats: Option<SortStats>,
 }
 
 impl SortOutput for Output {
@@ -86,21 +90,27 @@ impl SortOutput for Output {
     }
 
     fn stats(&self) -> SortStats {
-        // For in-memory output, we have a single "run" with all data
-        SortStats {
-            num_runs: 1,
-            runs_info: vec![RunInfo {
-                entries: self.data.len(),
-                file_size: 0, // No file for in-memory data
-            }],
-        }
+        self.stats.clone().unwrap_or_else(|| {
+            // Default stats for in-memory output
+            SortStats {
+                num_runs: 1,
+                runs_info: vec![RunInfo {
+                    entries: self.data.len(),
+                    file_size: 0, // No file for in-memory data
+                }],
+                run_generation_time_ms: None,
+                merge_time_ms: None,
+                run_generation_io_stats: None,
+                merge_io_stats: None,
+            }
+        })
     }
 }
 
 // Output implementation that chains run iterators without materializing
 pub struct RunsOutput {
     runs: Vec<RunImpl>,
-    initial_runs_count: usize, // Number of runs before merging
+    stats: SortStats,
 }
 
 impl SortOutput for RunsOutput {
@@ -120,19 +130,7 @@ impl SortOutput for RunsOutput {
     }
 
     fn stats(&self) -> SortStats {
-        let runs_info = self
-            .runs
-            .iter()
-            .map(|run| RunInfo {
-                entries: run.total_entries(),
-                file_size: run.total_bytes() as u64,
-            })
-            .collect();
-
-        SortStats {
-            num_runs: self.initial_runs_count,
-            runs_info,
-        }
+        self.stats.clone()
     }
 }
 
@@ -216,21 +214,32 @@ impl ExternalSorter {
 
 impl Sorter for ExternalSorter {
     fn sort(&mut self, sort_input: Box<dyn SortInput>) -> Result<Box<dyn SortOutput>, String> {
-        // Use the partition method from SortInput trait
-        let partitions = sort_input.partition(self.num_threads);
+        // Start timing for run generation
+        let run_generation_start = Instant::now();
 
-        println!("Starting sort with {} partitions", partitions.len());
+        // Create IO tracker for run generation phase
+        let run_generation_io_tracker = Arc::new(IoStatsTracker::new());
 
-        if partitions.is_empty() {
-            return Ok(Box::new(Output { data: vec![] }));
+        // Create parallel scanners for input data with IO tracking
+        let scanners = sort_input
+            .create_parallel_scanners(self.num_threads, Some((*run_generation_io_tracker).clone()));
+
+        println!("Starting sort with {} parallel scanners", scanners.len());
+
+        if scanners.is_empty() {
+            return Ok(Box::new(Output {
+                data: vec![],
+                stats: None,
+            }));
         }
 
         // Run Generation Phase (following sorter.rs pattern)
         let mut handles = vec![];
 
-        for (thread_id, partition) in partitions.into_iter().enumerate() {
+        for (thread_id, scanner) in scanners.into_iter().enumerate() {
             let buffer_size = (self.max_memory as f64 * 0.9 / self.num_threads as f64) as usize;
             let temp_dir = Arc::clone(&self.temp_dir_info).path.clone();
+            let io_tracker = Arc::clone(&run_generation_io_tracker);
 
             let handle = thread::spawn(move || {
                 let mut local_runs = Vec::new();
@@ -238,11 +247,15 @@ impl Sorter for ExternalSorter {
 
                 let run_path = temp_dir.join(format!("intermediate_{}.dat", thread_id));
                 let mut run_writer = Option::Some(
-                    AlignedWriter::open(&run_path, WriteMode::Append)
-                        .expect("Failed to create run writer"),
+                    AlignedWriter::open_with_tracker(
+                        &run_path,
+                        WriteMode::Append,
+                        Some((*io_tracker).clone()),
+                    )
+                    .expect("Failed to create run writer"),
                 );
 
-                for (key, value) in partition {
+                for (key, value) in scanner {
                     if !sort_buffer.append(&key, &value) {
                         // Buffer is full, sort and flush
                         sort_buffer.sort();
@@ -304,27 +317,64 @@ impl Sorter for ExternalSorter {
         }
 
         let initial_runs_count = output_runs.len();
-        println!("Generated {} runs", initial_runs_count);
+
+        // Capture run generation time
+        let run_generation_time = run_generation_start.elapsed();
+        let run_generation_time_ms = run_generation_time.as_millis();
+        println!(
+            "Generated {} runs in {} ms",
+            initial_runs_count, run_generation_time_ms
+        );
+
+        // Capture initial run info (before any merging)
+        let initial_runs_info: Vec<RunInfo> = output_runs
+            .iter()
+            .map(|run| RunInfo {
+                entries: run.total_entries(),
+                file_size: run.total_bytes() as u64,
+            })
+            .collect();
+
+        // Capture run generation IO stats
+        let run_generation_io_stats = Some(run_generation_io_tracker.get_detailed_stats());
 
         // If no runs or single run, return early
         if output_runs.is_empty() {
+            let stats = SortStats {
+                num_runs: 0,
+                runs_info: initial_runs_info,
+                run_generation_time_ms: Some(run_generation_time_ms),
+                merge_time_ms: None,
+                run_generation_io_stats,
+                merge_io_stats: None,
+            };
             return Ok(Box::new(RunsOutput {
                 runs: vec![],
-                initial_runs_count: 0,
+                stats,
             }));
         }
 
         if output_runs.len() == 1 {
-            // Single run - return it directly
-            println!(
-                "Sort complete with {} entries",
-                output_runs[0].total_entries()
-            );
+            let stats = SortStats {
+                num_runs: initial_runs_count,
+                runs_info: initial_runs_info,
+                run_generation_time_ms: Some(run_generation_time_ms),
+                merge_time_ms: None,
+                run_generation_io_stats,
+                merge_io_stats: None,
+            };
+
             return Ok(Box::new(RunsOutput {
                 runs: output_runs,
-                initial_runs_count,
+                stats,
             }));
         }
+
+        // Start timing for merge phase
+        let merge_start = Instant::now();
+
+        // Create IO tracker for merge phase
+        let merge_io_tracker = Arc::new(IoStatsTracker::new());
 
         // Parallel Merge Phase for many runs
         let desired_threads = self.num_threads;
@@ -359,6 +409,7 @@ impl Sorter for ExternalSorter {
         for thread_id in 0..merge_threads {
             let runs = Arc::clone(&runs_arc);
             let temp_dir = temp_dir.clone();
+            let io_tracker = Arc::clone(&merge_io_tracker);
             // Determine the key range for this thread
             let lower_bound = if thread_id == 0 {
                 vec![]
@@ -376,13 +427,23 @@ impl Sorter for ExternalSorter {
                 // Create iterators for this key range from all runs
                 let iterators: Vec<_> = runs
                     .iter()
-                    .map(|run| run.scan_range(&lower_bound, &upper_bound))
+                    .map(|run| {
+                        run.scan_range_with_io_tracker(
+                            &lower_bound,
+                            &upper_bound,
+                            Some((*io_tracker).clone()),
+                        )
+                    })
                     .collect();
 
                 // Create output run for this thread
                 let run_path = temp_dir.join(format!("merge_output_{}.dat", thread_id));
-                let writer = AlignedWriter::open(&run_path, WriteMode::Append)
-                    .expect("Failed to create merge output writer");
+                let writer = AlignedWriter::open_with_tracker(
+                    &run_path,
+                    WriteMode::Append,
+                    Some((*io_tracker).clone()),
+                )
+                .expect("Failed to create merge output writer");
                 let mut output_run =
                     RunImpl::from_writer(writer).expect("Failed to create merge output run");
 
@@ -411,12 +472,27 @@ impl Sorter for ExternalSorter {
             output_runs.push(handle.join().unwrap());
         }
 
-        let total_entries: usize = output_runs.iter().map(|r| r.total_entries()).sum();
-        println!("Sort complete with {} entries", total_entries);
+        // Capture merge time
+        let merge_time = merge_start.elapsed();
+        let merge_time_ms = merge_time.as_millis();
+
+        // Capture merge IO stats
+        let merge_io_stats = Some(merge_io_tracker.get_detailed_stats());
+
+        println!("Merge phase took {} ms", merge_time_ms);
+
+        let stats = SortStats {
+            num_runs: initial_runs_count,
+            runs_info: initial_runs_info,
+            run_generation_time_ms: Some(run_generation_time_ms),
+            merge_time_ms: Some(merge_time_ms),
+            run_generation_io_stats,
+            merge_io_stats,
+        };
 
         Ok(Box::new(RunsOutput {
             runs: output_runs,
-            initial_runs_count,
+            stats,
         }))
     }
 }

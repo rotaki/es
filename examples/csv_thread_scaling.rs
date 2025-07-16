@@ -98,10 +98,9 @@ fn main() -> Result<(), String> {
     let mut baseline_time = 0.0;
     let mut total_rows_for_check = 0;
     for &num_threads in &config.thread_counts {
-        let csv_direct =
-            CsvInputDirect::new(&config.csv_file, direct_config.clone())?.with_io_stats(); // Enable I/O tracking
+        let csv_direct = CsvInputDirect::new(&config.csv_file, direct_config.clone())?; // Enable I/O tracking
 
-        let io_tracker = csv_direct.io_stats.clone();
+        let io_tracker = Some(IoStatsTracker::new()); // Create I/O tracker
         let (duration, throughput_rows, throughput_mb, row_count, io_mb_s, iops) =
             benchmark_parallel_read(Box::new(csv_direct), num_threads, io_tracker.as_ref())?;
 
@@ -393,7 +392,7 @@ fn benchmark_parallel_read(
 
     let start = Instant::now();
 
-    let partitions = input.partition(num_threads);
+    let partitions = input.create_parallel_scanners(num_threads, None);
     let total_rows = Arc::new(AtomicUsize::new(0));
     let total_bytes = Arc::new(AtomicUsize::new(0));
 
@@ -465,7 +464,7 @@ fn analyze_partition_balance(
     input: Box<dyn SortInput>,
     num_threads: usize
 ) -> Result<PartitionStats, String> {
-    let partitions = input.partition(num_threads);
+    let partitions = input.create_parallel_scanners(num_threads, None);
     let partition_sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
 
     let handles: Vec<_> = partitions
@@ -517,7 +516,7 @@ fn benchmark_with_cpu_monitoring(
     let start = Instant::now();
     let start_cpu = std::time::SystemTime::now();
 
-    let partitions = input.partition(num_threads);
+    let partitions = input.create_parallel_scanners(num_threads, None);
     let handles: Vec<_> = partitions
         .into_iter()
         .map(|partition| {

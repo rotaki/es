@@ -182,7 +182,7 @@ fn test_concurrent_massive_sorts() {
 
                 // Shuffle
                 use rand::seq::SliceRandom;
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 data.shuffle(&mut rng);
 
                 let input = Input { data };
@@ -265,17 +265,17 @@ fn test_alternating_small_large() {
 #[test]
 fn test_random_binary_keys() {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut sorter = ExternalSorter::new_with_dir(4, 1024, test_dir());
 
     let mut data = Vec::new();
     for _ in 0..5000 {
         // Random binary keys of varying lengths
-        let key_len = rng.gen_range(1..50);
+        let key_len = rng.random_range(1..50);
         let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
 
-        let value_len = rng.gen_range(1..100);
+        let value_len = rng.random_range(1..100);
         let value: Vec<u8> = (0..value_len).map(|_| rng.gen()).collect();
 
         data.push((key, value));
@@ -308,7 +308,7 @@ fn test_progressive_key_lengths() {
 
     // Shuffle
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     let input = Input { data };

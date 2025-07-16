@@ -89,7 +89,6 @@ pub struct CsvInputDirect {
     path: Arc<PathBuf>,
     config: CsvDirectConfig,
     file_size: u64,
-    pub io_stats: Option<IoStatsTracker>,
 }
 
 impl CsvInputDirect {
@@ -121,39 +120,36 @@ impl CsvInputDirect {
             path: Arc::new(path),
             config,
             file_size,
-            io_stats: None,
         })
-    }
-
-    /// Enable I/O statistics tracking
-    pub fn with_io_stats(mut self) -> Self {
-        self.io_stats = Some(IoStatsTracker::new());
-        self
     }
 }
 
 impl SortInput for CsvInputDirect {
-    fn partition(&self, n: usize) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
-        if n == 0 || self.file_size == 0 {
+    fn create_parallel_scanners(
+        &self,
+        num_scanners: usize,
+        io_tracker: Option<IoStatsTracker>,
+    ) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
+        if num_scanners == 0 || self.file_size == 0 {
             return vec![];
         }
 
-        let bytes_per_partition = (self.file_size + n as u64 - 1) / n as u64;
-        let mut partitions = Vec::new();
+        let bytes_per_scanner = (self.file_size + num_scanners as u64 - 1) / num_scanners as u64;
+        let mut scanners = Vec::new();
 
-        for i in 0..n {
-            let start_byte = i as u64 * bytes_per_partition;
-            let end_byte = if i == n - 1 {
+        for i in 0..num_scanners {
+            let start_byte = i as u64 * bytes_per_scanner;
+            let end_byte = if i == num_scanners - 1 {
                 u64::MAX // Last partition reads to EOF
             } else {
-                ((i + 1) as u64 * bytes_per_partition).min(self.file_size)
+                ((i + 1) as u64 * bytes_per_scanner).min(self.file_size)
             };
 
             if start_byte >= self.file_size {
                 break;
             }
 
-            let partition = CsvPartitionDirect {
+            let scanner = CsvPartitionDirect {
                 path: Arc::clone(&self.path),
                 config: self.config.clone(),
                 start_byte,
@@ -162,14 +158,13 @@ impl SortInput for CsvInputDirect {
                 initialized: false,
                 reader: None,
                 line_buffer: String::new(),
-                io_stats: self.io_stats.clone(),
+                io_stats: io_tracker.clone(),
             };
 
-            partitions
-                .push(Box::new(partition) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
+            scanners.push(Box::new(scanner) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
         }
 
-        partitions
+        scanners
     }
 }
 
@@ -441,7 +436,7 @@ mod tests {
         ]));
         let config = CsvDirectConfig::new(schema);
         let csv_input = CsvInputDirect::new(&path, config).unwrap();
-        let partitions = csv_input.partition(3);
+        let partitions = csv_input.create_parallel_scanners(3, None);
         assert_eq!(partitions.len(), 3);
 
         // Collect all entries from all partitions
@@ -492,7 +487,7 @@ mod tests {
         ]));
         let config = CsvDirectConfig::new(schema);
         let csv_input = CsvInputDirect::new(&path, config).unwrap();
-        let partitions = csv_input.partition(4);
+        let partitions = csv_input.create_parallel_scanners(4, None);
 
         // Collect all entries
         let mut all_entries = Vec::new();
@@ -575,7 +570,7 @@ mod tests {
         ]));
         let config = CsvDirectConfig::new(schema);
         let csv_input = CsvInputDirect::new(&path, config).unwrap();
-        let partitions = csv_input.partition(1);
+        let partitions = csv_input.create_parallel_scanners(1, None);
 
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
         assert_eq!(entries.len(), 4);
@@ -616,7 +611,7 @@ mod tests {
         config.buffer_size = 64 * 1024; // 64KB buffer
 
         let csv_input = CsvInputDirect::new(&path, config).unwrap();
-        let partitions = csv_input.partition(2);
+        let partitions = csv_input.create_parallel_scanners(2, None);
 
         let mut all_entries = Vec::new();
         for partition in partitions {
@@ -653,7 +648,7 @@ mod tests {
         ]));
         let config = CsvDirectConfig::new(schema);
         let csv_input = CsvInputDirect::new(&path, config).unwrap();
-        let partitions = csv_input.partition(5);
+        let partitions = csv_input.create_parallel_scanners(5, None);
 
         let mut total_count = 0;
         for partition in partitions {

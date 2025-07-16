@@ -41,7 +41,7 @@ fn test_csv_like_data() {
 
     // Shuffle to simulate unordered log entries
     use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
     let input = Input { data };
@@ -216,14 +216,16 @@ fn test_genomic_data_sorting() {
 
     // Generate sequences
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for i in 0..5000 {
         // Variable length sequences
-        let seq_len = rng.gen_range(10..50);
-        let sequence: Vec<u8> = (0..seq_len).map(|_| bases[rng.gen_range(0..4)]).collect();
+        let seq_len = rng.random_range(10..50);
+        let sequence: Vec<u8> = (0..seq_len)
+            .map(|_| bases[rng.random_range(0..4)])
+            .collect();
 
-        let metadata = format!("gene_{}_quality_{}", i, rng.gen_range(0..100));
+        let metadata = format!("gene_{}_quality_{}", i, rng.random_range(0..100));
         data.push((sequence, metadata.into_bytes()));
     }
 
@@ -372,7 +374,7 @@ fn test_real_world_log_sorting() {
 
     let mut data = Vec::new();
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for i in 0..50_000 {
         let timestamp = format!(
@@ -383,8 +385,8 @@ fn test_real_world_log_sorting() {
             i % 1000
         );
 
-        let level = log_levels[rng.gen_range(0..log_levels.len())];
-        let component = components[rng.gen_range(0..components.len())];
+        let level = log_levels[rng.random_range(0..log_levels.len())];
+        let component = components[rng.random_range(0..components.len())];
         let message = format!("[{}] [{}] Processing request {}", level, component, i);
 
         // Use timestamp as key for chronological sorting
