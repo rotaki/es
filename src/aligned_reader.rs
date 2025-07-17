@@ -12,6 +12,11 @@ use std::io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekF
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
+use std::os::unix::io::AsRawFd;
+
+
+#[cfg(target_os = "macos")]
+use libc::{fcntl, F_NOCACHE};
 
 pub const PAGE_SIZE: usize = 4096; // Page size for O_DIRECT alignment
 
@@ -44,12 +49,26 @@ impl AlignedReader {
         tracker: Option<IoStatsTracker>,
     ) -> Result<Self, String> {
         // Open file with O_DIRECT
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
+        let mut options = OpenOptions::new();
+        options.read(true);
+
+        #[cfg(target_os = "linux")]
+        {
+            options.custom_flags(libc::O_DIRECT);
+        }
+
+        let file = options
             .open(path)
             .map_err(|e| format!("Failed to open file with O_DIRECT: {}", e))?;
 
+        #[cfg(target_os = "macos")]
+        {
+            let fd = file.as_raw_fd();
+            let ret = unsafe { fcntl(fd, F_NOCACHE, 1) };
+            if ret == -1 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
         // Round up buffer size to be page-aligned
         let buffer = allocate_aligned_buffer(buffer_size);
 
@@ -563,3 +582,4 @@ mod tests {
         assert_eq!(&buffer2, b"e conte");
     }
 }
+
