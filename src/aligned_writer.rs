@@ -8,6 +8,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::os::unix::io::AsRawFd;
+
+#[cfg(target_os = "macos")]
+use libc::{fcntl, F_NOCACHE};
 
 pub const PAGE_SIZE: usize = 4096; // Page size for O_DIRECT alignment
 
@@ -76,7 +80,6 @@ impl AlignedWriter {
 
         // Configure OpenOptions based on mode
         let mut options = OpenOptions::new();
-        options.custom_flags(libc::O_DIRECT);
 
         match mode {
             WriteMode::Create => {
@@ -89,14 +92,30 @@ impl AlignedWriter {
                 options.create_new(true).write(true);
             }
         }
+        
+        // Linux: apply O_DIRECT
+        #[cfg(target_os = "linux")]
+        {
+            options.custom_flags(libc::O_DIRECT);
+        }
 
-        // Open file with O_DIRECT
+
         let file = options.open(path).map_err(|e| match mode {
             WriteMode::CreateNew if e.kind() == ErrorKind::AlreadyExists => {
                 format!("File already exists: {:?}", path)
             }
             _ => format!("Failed to open file with O_DIRECT: {}", e),
         })?;
+
+        // macOS: simulate O_DIRECT with F_NOCACHE
+        #[cfg(target_os = "macos")]
+        {
+            let fd = file.as_raw_fd();
+            let ret = unsafe { fcntl(fd, F_NOCACHE, 1) };
+            if ret == -1 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+        }
 
         // Allocate aligned buffer with specified size
         let buffer = allocate_aligned_buffer(buffer_size);
@@ -455,3 +474,4 @@ mod tests {
         assert!(metadata.len() >= 50 * 1024);
     }
 }
+
