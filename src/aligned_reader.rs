@@ -9,7 +9,6 @@ use parquet::errors::Result as ParquetResult;
 use parquet::file::reader::{ChunkReader, Length};
 use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,8 +25,8 @@ pub struct AlignedReader {
     file: File,
     file_pos: u64,
     buffer: Vec<u8>,
-    buffer_start: usize,
-    buffer_end: usize,
+    buffer_offset: usize,
+    buffer_valid_len: usize,
     // I/O statistics
     io_tracker: Option<IoStatsTracker>, // Global tracker to update
 }
@@ -46,7 +45,7 @@ impl AlignedReader {
         // Open file with O_DIRECT
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_DIRECT)
+            // .custom_flags(libc::O_DIRECT)
             .open(path)
             .map_err(|e| format!("Failed to open file with O_DIRECT: {}", e))?;
 
@@ -60,8 +59,8 @@ impl AlignedReader {
             file,
             buffer,
             file_pos: aligned_pos,
-            buffer_start: 0,
-            buffer_end: 0,
+            buffer_offset: 0,
+            buffer_valid_len: 0,
             io_tracker: tracker,
         };
 
@@ -77,7 +76,7 @@ impl AlignedReader {
             reader
                 .fill_buffer()
                 .map_err(|e| format!("Failed to fill buffer: {}", e))?;
-            reader.buffer_start = skip_bytes.min(reader.buffer_end);
+            reader.buffer_offset = skip_bytes.min(reader.buffer_valid_len);
         }
 
         Ok(reader)
@@ -86,7 +85,7 @@ impl AlignedReader {
     /// Skip to the next newline character and return the number of bytes skipped
     pub fn skip_to_newline(&mut self) -> Result<usize, String> {
         // Make sure we have data in the buffer
-        if self.buffer_start >= self.buffer_end {
+        if self.buffer_offset >= self.buffer_valid_len {
             self.fill_buffer()?;
         }
 
@@ -94,36 +93,36 @@ impl AlignedReader {
 
         loop {
             // Check remaining buffer
-            if let Some(pos) = self.buffer[self.buffer_start..self.buffer_end]
+            if let Some(pos) = self.buffer[self.buffer_offset..self.buffer_valid_len]
                 .iter()
                 .position(|&b| b == b'\n')
             {
                 let bytes_skipped = pos + 1;
-                self.buffer_start += bytes_skipped;
+                self.buffer_offset += bytes_skipped;
                 total_skipped += bytes_skipped;
                 return Ok(total_skipped);
             }
 
             // Need more data
-            let bytes_in_buffer = self.buffer_end - self.buffer_start;
+            let bytes_in_buffer = self.buffer_valid_len - self.buffer_offset;
             total_skipped += bytes_in_buffer;
-            self.buffer_start = self.buffer_end;
-            if self.buffer_end == 0 || self.buffer_end < self.buffer.len() {
+            self.buffer_offset = self.buffer_valid_len;
+            if self.buffer_valid_len == 0 || self.buffer_valid_len < self.buffer.len() {
                 return Ok(total_skipped);
             }
 
             self.fill_buffer()?;
-            if self.buffer_end == 0 {
+            if self.buffer_valid_len == 0 {
                 return Ok(total_skipped);
             }
         }
     }
 
     fn fill_buffer(&mut self) -> Result<(), String> {
-        self.buffer_start = 0;
+        self.buffer_offset = 0;
         match self.file.read(&mut self.buffer) {
             Ok(n) => {
-                self.buffer_end = n;
+                self.buffer_valid_len = n;
                 self.file_pos += n as u64;
 
                 // Update global tracker if present
@@ -148,12 +147,12 @@ impl Read for AlignedReader {
 
         loop {
             // If we have data in buffer, copy it
-            let available = self.buffer_end - self.buffer_start;
+            let available = self.buffer_valid_len - self.buffer_offset;
             if available > 0 {
                 let to_copy = available.min(buf.len() - total_read);
                 buf[total_read..total_read + to_copy]
-                    .copy_from_slice(&self.buffer[self.buffer_start..self.buffer_start + to_copy]);
-                self.buffer_start += to_copy;
+                    .copy_from_slice(&self.buffer[self.buffer_offset..self.buffer_offset + to_copy]);
+                self.buffer_offset += to_copy;
                 total_read += to_copy;
 
                 if total_read == buf.len() {
@@ -170,7 +169,7 @@ impl Read for AlignedReader {
                 }
             }
 
-            if self.buffer_end == 0 {
+            if self.buffer_valid_len == 0 {
                 // EOF
                 return Ok(total_read);
             }
@@ -191,7 +190,7 @@ impl Seek for AlignedReader {
                 }
             }
             SeekFrom::Current(offset) => {
-                let current = self.file_pos - (self.buffer_end - self.buffer_start) as u64;
+                let current = self.file_pos - (self.buffer_valid_len - self.buffer_offset) as u64;
                 if offset >= 0 {
                     current + offset as u64
                 } else {
@@ -200,7 +199,7 @@ impl Seek for AlignedReader {
             }
         };
 
-        let current = self.file_pos - (self.buffer_end - self.buffer_start) as u64;
+        let current = self.file_pos - (self.buffer_valid_len - self.buffer_offset) as u64;
         if new_pos == current {
             return Ok(new_pos);
         }
@@ -214,14 +213,14 @@ impl Seek for AlignedReader {
         self.file_pos = aligned_pos;
 
         // Clear buffer and read new data
-        self.buffer_start = 0;
-        self.buffer_end = 0;
+        self.buffer_offset = 0;
+        self.buffer_valid_len = 0;
 
         if skip_bytes > 0 {
             // Read a buffer and skip to the desired position
             self.fill_buffer()
                 .map_err(|e| IoError::new(ErrorKind::Other, e))?;
-            self.buffer_start = skip_bytes.min(self.buffer_end);
+            self.buffer_offset = skip_bytes.min(self.buffer_valid_len);
         }
 
         Ok(new_pos)

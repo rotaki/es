@@ -16,7 +16,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use es::{
     order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter,
-    ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
+    GlobalFileManager, ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
 };
 use std::env;
 use std::path::Path;
@@ -452,7 +452,7 @@ fn run_single_benchmark(
         parquet_config.value_columns = config.value_columns.clone();
         parquet_config.buffer_size = config.buffer_size;
 
-        let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config)?;
+        let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config, Arc::new(GlobalFileManager::new(512)))?;
         println!("  Total rows: {}", parquet_input.len());
         Box::new(parquet_input)
     } else {
@@ -483,7 +483,7 @@ fn run_single_benchmark(
         csv_config.has_headers = config.has_headers;
         csv_config.buffer_size = config.buffer_size;
 
-        Box::new(CsvInputDirect::new(&config.file_path, csv_config)?)
+        Box::new(CsvInputDirect::new(&config.file_path, csv_config, Arc::new(GlobalFileManager::new(512)))?)
     };
 
     let mut sorter = ExternalSorter::new(threads, memory_mb * 1024 * 1024);

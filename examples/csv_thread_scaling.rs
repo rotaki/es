@@ -13,7 +13,7 @@
 //!   --help                       Show this help message
 
 use arrow::datatypes::{DataType, Field, Schema};
-use es::{CsvDirectConfig, CsvInputDirect, IoStatsTracker, SortInput};
+use es::{CsvDirectConfig, CsvInputDirect, GlobalFileManager, IoStatsTracker, SortInput};
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -98,7 +98,7 @@ fn main() -> Result<(), String> {
     let mut baseline_time = 0.0;
     let mut total_rows_for_check = 0;
     for &num_threads in &config.thread_counts {
-        let csv_direct = CsvInputDirect::new(&config.csv_file, direct_config.clone())?; // Enable I/O tracking
+        let csv_direct = CsvInputDirect::new(&config.csv_file, direct_config.clone(), Arc::new(GlobalFileManager::new(512)))?; // Enable I/O tracking
 
         let io_tracker = Some(IoStatsTracker::new()); // Create I/O tracker
         let (duration, throughput_rows, throughput_mb, row_count, io_mb_s, iops) =

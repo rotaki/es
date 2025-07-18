@@ -12,11 +12,12 @@
 //!   -h, --help                   Show this help message
 
 use crossbeam::channel;
-use es::{IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
+use es::{GlobalFileManager, IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::env;
 use std::fs::File;
 use std::process;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -120,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             buffer_size,
         };
 
-        let parquet_direct = ParquetInputDirect::new(filename, parquet_config)?;
+        let parquet_direct = ParquetInputDirect::new(filename, parquet_config, Arc::new(GlobalFileManager::new(512)))?;
 
         // Create I/O tracker
         let io_tracker = IoStatsTracker::new();

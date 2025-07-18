@@ -3,10 +3,12 @@
 //! This uses a file opened with O_DIRECT flag but wrapped in BufReader
 //! to handle line-oriented reading efficiently.
 
-use crate::{order_preserving_encoding::*, AlignedReader, IoStatsTracker, SortInput};
+use crate::{order_preserving_encoding::*, IoStatsTracker, SortInput};
+use crate::global_file_manager::GlobalFileManager;
+use crate::managed_aligned_reader::ManagedAlignedReader;
 use arrow::datatypes::{DataType, Schema};
 use chrono::Datelike;
-use std::io::{BufRead, BufReader, Seek};
+use std::io::Seek;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -89,12 +91,17 @@ pub struct CsvInputDirect {
     path: Arc<PathBuf>,
     config: CsvDirectConfig,
     file_size: u64,
+    file_manager: Arc<GlobalFileManager>,
 }
 
 impl CsvInputDirect {
-    /// Create a new CSV input reader using Direct I/O
-    pub fn new(path: impl AsRef<Path>, config: CsvDirectConfig) -> Result<Self, String> {
-        let path = path.as_ref().to_path_buf();
+    /// Create a new CSV input reader using Direct I/O with GlobalFileManager
+    pub fn new(
+        path: impl AsRef<Path>, 
+        config: CsvDirectConfig,
+        file_manager: Arc<GlobalFileManager>
+    ) -> Result<Self, String> {
+        let path = path.as_ref();
 
         if !path.exists() {
             return Err(format!("File does not exist: {:?}", path));
@@ -108,7 +115,7 @@ impl CsvInputDirect {
             return Err("At least one value column must be specified".to_string());
         }
 
-        let file_size = std::fs::metadata(&path)
+        let file_size = std::fs::metadata(path)
             .map_err(|e| format!("Failed to get file metadata: {}", e))?
             .len();
 
@@ -117,9 +124,10 @@ impl CsvInputDirect {
         }
 
         Ok(Self {
-            path: Arc::new(path),
+            path: Arc::new(path.to_path_buf()),
             config,
             file_size,
+            file_manager,
         })
     }
 }
@@ -159,6 +167,7 @@ impl SortInput for CsvInputDirect {
                 reader: None,
                 line_buffer: String::new(),
                 io_stats: io_tracker.clone(),
+                file_manager: self.file_manager.clone(),
             };
 
             scanners.push(Box::new(scanner) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
@@ -168,6 +177,8 @@ impl SortInput for CsvInputDirect {
     }
 }
 
+// ReaderType enum removed - now only using ManagedAlignedReader
+
 /// Partition iterator for CSV files using Direct I/O
 struct CsvPartitionDirect {
     path: Arc<PathBuf>,
@@ -176,9 +187,10 @@ struct CsvPartitionDirect {
     end_byte: u64,
     skip_first_partial: bool,
     initialized: bool,
-    reader: Option<BufReader<AlignedReader>>,
+    reader: Option<ManagedAlignedReader>,
     line_buffer: String,
     io_stats: Option<IoStatsTracker>,
+    file_manager: Arc<GlobalFileManager>,
 }
 
 impl Iterator for CsvPartitionDirect {
@@ -262,29 +274,32 @@ impl CsvPartitionDirect {
     fn initialize(&mut self) -> Result<(), String> {
         self.initialized = true;
 
-        // Use AlignedReader for all partitions with optional I/O tracking
-        let mut aligned_reader = AlignedReader::new_with_tracker(
+        
+        // Always use ManagedAlignedReader with the required file_manager
+        // Use the new constructor that handles start_byte properly
+        let mut managed_reader = ManagedAlignedReader::with_start_position(
+            self.file_manager.clone(),
             &*self.path,
             self.start_byte,
-            self.config.buffer_size,
+            64 * 1024,  // 64KB buffer
             self.io_stats.clone(),
-        )?;
-
+        ).map_err(|e| e.to_string())?;
+        
         // Skip to next complete line if not the first partition
         if self.skip_first_partial && self.start_byte > 0 {
-            aligned_reader
+            managed_reader
                 .skip_to_newline()
                 .map_err(|e| format!("Failed to skip to newline: {}", e))?;
         }
-
+        
         // Skip headers if this is the first partition
         if self.config.has_headers && self.start_byte == 0 {
-            aligned_reader
+            managed_reader
                 .skip_to_newline()
                 .map_err(|e| format!("Failed to skip header line: {}", e))?;
         }
-
-        self.reader = Some(BufReader::new(aligned_reader));
+        
+        self.reader = Some(managed_reader);
 
         Ok(())
     }
@@ -435,7 +450,8 @@ mod tests {
             Field::new("value", DataType::Utf8, false),
         ]));
         let config = CsvDirectConfig::new(schema);
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
         let partitions = csv_input.create_parallel_scanners(3, None);
         assert_eq!(partitions.len(), 3);
 
@@ -486,7 +502,8 @@ mod tests {
             Field::new("description", DataType::Utf8, false),
         ]));
         let config = CsvDirectConfig::new(schema);
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
         let partitions = csv_input.create_parallel_scanners(4, None);
 
         // Collect all entries
@@ -531,7 +548,8 @@ mod tests {
             Field::new("value", DataType::Utf8, false),
         ]));
         let config = CsvDirectConfig::new(schema);
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
 
         // Sort using external sorter with multiple threads
         let mut sorter = ExternalSorter::new(4, 1024);
@@ -569,7 +587,8 @@ mod tests {
             Field::new("value", DataType::Utf8, false),
         ]));
         let config = CsvDirectConfig::new(schema);
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
         let partitions = csv_input.create_parallel_scanners(1, None);
 
         let entries: Vec<_> = partitions.into_iter().flatten().collect();
@@ -610,7 +629,8 @@ mod tests {
         config.has_headers = true;
         config.buffer_size = 64 * 1024; // 64KB buffer
 
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
         let partitions = csv_input.create_parallel_scanners(2, None);
 
         let mut all_entries = Vec::new();
@@ -628,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_direct_io_alignment() {
-        // Test that AlignedReader handles non-aligned start positions correctly
+        // Test that ManagedAlignedReader handles non-aligned start positions correctly
         let dir = std::env::temp_dir().join("direct_io_alignment_test");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("alignment_test.csv");
@@ -647,7 +667,8 @@ mod tests {
             Field::new("header2", DataType::Utf8, false),
         ]));
         let config = CsvDirectConfig::new(schema);
-        let csv_input = CsvInputDirect::new(&path, config).unwrap();
+        let file_manager = Arc::new(GlobalFileManager::new(512));
+        let csv_input = CsvInputDirect::new(&path, config, file_manager).unwrap();
         let partitions = csv_input.create_parallel_scanners(5, None);
 
         let mut total_count = 0;

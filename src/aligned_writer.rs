@@ -6,7 +6,6 @@
 use crate::IoStatsTracker;
 use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub const PAGE_SIZE: usize = 4096; // Page size for O_DIRECT alignment
@@ -76,7 +75,7 @@ impl AlignedWriter {
 
         // Configure OpenOptions based on mode
         let mut options = OpenOptions::new();
-        options.custom_flags(libc::O_DIRECT);
+        // options.custom_flags(libc::O_DIRECT);
 
         match mode {
             WriteMode::Create => {
@@ -218,7 +217,7 @@ impl Drop for AlignedWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AlignedReader;
+    use crate::aligned_reader::AlignedReader;
     use std::fs;
     use std::io::Read;
     use tempfile::NamedTempFile;

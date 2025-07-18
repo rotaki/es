@@ -1,0 +1,388 @@
+use std::io::{self, Write};
+use std::os::unix::io::RawFd;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::aligned_buffer::AlignedBuffer;
+use crate::global_file_manager::{GlobalFileManager, pwrite_fd};
+use crate::io_stats::IoStatsTracker;
+
+const DEFAULT_BUF_SIZE: usize = 64 * 1024; // 64KB
+const ALIGNMENT: usize = 512;
+
+/// AlignedWriter that uses GlobalFileManager for file operations
+pub struct ManagedAlignedWriter {
+    /// Raw file descriptor for direct operations
+    fd: RawFd,
+    /// Aligned buffer for writing
+    buffer: AlignedBuffer,
+    /// Current position in the file (aligned)
+    file_offset: u64,
+    /// Current position in the buffer
+    buffer_pos: usize,
+    /// Logical position in the file (unaligned)
+    logical_pos: u64,
+    /// Alignment requirement
+    alignment: usize,
+    /// Buffer size
+    buffer_size: usize,
+    /// I/O statistics tracker
+    io_tracker: Option<IoStatsTracker>,
+}
+
+impl ManagedAlignedWriter {
+    /// Create a new ManagedAlignedWriter
+    pub fn new(
+        file_manager: Arc<GlobalFileManager>,
+        path: impl AsRef<Path>,
+    ) -> io::Result<Self> {
+        Self::with_buffer_size(file_manager, path, DEFAULT_BUF_SIZE)
+    }
+
+    /// Create a new ManagedAlignedWriter with I/O tracker
+    pub fn new_with_tracker(
+        file_manager: Arc<GlobalFileManager>,
+        path: impl AsRef<Path>,
+        tracker: Option<IoStatsTracker>,
+    ) -> io::Result<Self> {
+        Self::with_buffer_size_and_tracker(file_manager, path, DEFAULT_BUF_SIZE, tracker)
+    }
+
+    /// Create a new ManagedAlignedWriter with specified buffer size
+    pub fn with_buffer_size(
+        file_manager: Arc<GlobalFileManager>,
+        path: impl AsRef<Path>,
+        buffer_size: usize,
+    ) -> io::Result<Self> {
+        Self::with_buffer_size_and_tracker(file_manager, path, buffer_size, None)
+    }
+
+    /// Create a new ManagedAlignedWriter with specified buffer size and I/O tracker
+    pub fn with_buffer_size_and_tracker(
+        file_manager: Arc<GlobalFileManager>,
+        path: impl AsRef<Path>,
+        buffer_size: usize,
+        tracker: Option<IoStatsTracker>,
+    ) -> io::Result<Self> {
+        let aligned_buffer_size = (buffer_size + ALIGNMENT - 1) & !(ALIGNMENT - 1);
+        
+        // Get the raw file descriptor from the file manager with write flags
+        let fd = file_manager.get_fd_with_flags(path.as_ref(), libc::O_RDWR | libc::O_CREAT)?;
+        
+        Ok(Self {
+            fd,
+            buffer: AlignedBuffer::new(aligned_buffer_size, ALIGNMENT)?,
+            file_offset: 0,
+            buffer_pos: 0,
+            logical_pos: 0,
+            alignment: ALIGNMENT,
+            buffer_size: aligned_buffer_size,
+            io_tracker: tracker,
+        })
+    }
+
+    /// Flush the internal buffer to the file
+    fn flush_buffer(&mut self) -> io::Result<()> {
+        if self.buffer_pos == 0 {
+            return Ok(());
+        }
+
+        // For Direct I/O, we need to write aligned chunks
+        let write_len = (self.buffer_pos + self.alignment - 1) & !(self.alignment - 1);
+        
+        // Zero out the padding bytes
+        for i in self.buffer_pos..write_len {
+            self.buffer.as_mut_slice()[i] = 0;
+        }
+
+        // Write the aligned buffer using the raw file descriptor
+        let written = pwrite_fd(
+            self.fd,
+            &self.buffer.as_slice()[..write_len],
+            self.file_offset,
+        )?;
+
+        if written != write_len {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Failed to write all bytes",
+            ));
+        }
+
+        // Update I/O statistics if tracker is present
+        if let Some(ref tracker) = self.io_tracker {
+            tracker.add_write(1, self.buffer_pos as u64);
+        }
+
+        self.logical_pos += self.buffer_pos as u64;
+        self.file_offset += write_len as u64;
+        self.buffer_pos = 0;
+
+        Ok(())
+    }
+
+    /// Get the current position in the file
+    pub fn position(&self) -> u64 {
+        self.logical_pos + self.buffer_pos as u64
+    }
+
+    /// Sync all data to disk
+    pub fn sync(&mut self) -> io::Result<()> {
+        self.flush()
+    }
+}
+
+impl Write for ManagedAlignedWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut total_written = 0;
+
+        while total_written < buf.len() {
+            let available = self.buffer_size - self.buffer_pos;
+            let to_copy = std::cmp::min(buf.len() - total_written, available);
+
+            // Copy data to buffer
+            self.buffer.as_mut_slice()[self.buffer_pos..self.buffer_pos + to_copy]
+                .copy_from_slice(&buf[total_written..total_written + to_copy]);
+
+            self.buffer_pos += to_copy;
+            total_written += to_copy;
+
+            // Flush if buffer is full
+            if self.buffer_pos == self.buffer_size {
+                self.flush_buffer()?;
+            }
+        }
+
+        Ok(total_written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()
+    }
+}
+
+impl Drop for ManagedAlignedWriter {
+    fn drop(&mut self) {
+        // Best effort flush on drop
+        let _ = self.flush_buffer();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Read;
+    use tempfile::tempdir;
+    use crate::managed_aligned_reader::ManagedAlignedReader;
+
+    #[test]
+    fn test_basic_write() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        {
+            let mut writer = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file_path).unwrap();
+            
+            let data = b"Hello, World!";
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Read back using regular reader to verify
+        let content = fs::read(&file_path).unwrap();
+        assert!(content.starts_with(b"Hello, World!"));
+    }
+
+    #[test]
+    fn test_large_write() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        // Generate test data larger than buffer
+        let test_data: Vec<u8> = (0..200_000).map(|i| (i % 256) as u8).collect();
+        
+        {
+            let mut writer = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file_path).unwrap();
+            writer.write_all(&test_data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Verify using ManagedAlignedReader
+        let mut reader = ManagedAlignedReader::new(Arc::clone(&file_manager), &file_path).unwrap();
+        let mut read_data = vec![0u8; test_data.len()];
+        reader.read_exact(&mut read_data).unwrap();
+        
+        assert_eq!(&read_data[..test_data.len()], &test_data[..]);
+    }
+
+    #[test]
+    fn test_multiple_writers_different_files() {
+        let dir = tempdir().unwrap();
+        let file1 = dir.path().join("file1.dat");
+        let file2 = dir.path().join("file2.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        let mut writer1 = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file1).unwrap();
+        let mut writer2 = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file2).unwrap();
+        
+        writer1.write_all(b"File 1 content").unwrap();
+        writer2.write_all(b"File 2 content").unwrap();
+        
+        writer1.flush().unwrap();
+        writer2.flush().unwrap();
+        
+        let content1 = fs::read(&file1).unwrap();
+        let content2 = fs::read(&file2).unwrap();
+        
+        assert!(content1.starts_with(b"File 1 content"));
+        assert!(content2.starts_with(b"File 2 content"));
+    }
+
+    #[test]
+    fn test_position_tracking() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        let mut writer = ManagedAlignedWriter::new(file_manager, &file_path).unwrap();
+        
+        assert_eq!(writer.position(), 0);
+        
+        writer.write_all(b"12345").unwrap();
+        assert_eq!(writer.position(), 5);
+        
+        writer.write_all(b"67890").unwrap();
+        assert_eq!(writer.position(), 10);
+        
+        writer.flush().unwrap();
+        assert_eq!(writer.position(), 10);
+    }
+
+    #[test]
+    fn test_write_patterns() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        {
+            let mut writer = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file_path).unwrap();
+            
+            // Write pattern: small, large, small
+            writer.write_all(b"small").unwrap();
+            
+            let large = vec![b'X'; 100_000];
+            writer.write_all(&large).unwrap();
+            
+            writer.write_all(b"end").unwrap();
+            writer.flush().unwrap();
+        }
+        
+        // Verify pattern
+        let mut reader = ManagedAlignedReader::new(Arc::clone(&file_manager), &file_path).unwrap();
+        let mut buf = vec![0u8; 5];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"small");
+        
+        let mut buf = vec![0u8; 100_000];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, vec![b'X'; 100_000]);
+        
+        let mut buf = vec![0u8; 3];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"end");
+    }
+
+    #[test]
+    fn test_auto_flush_on_drop() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        {
+            let mut writer = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file_path).unwrap();
+            writer.write_all(b"Auto flush test").unwrap();
+            // No explicit flush - should flush on drop
+        }
+        
+        // Verify data was written
+        let content = fs::read(&file_path).unwrap();
+        assert!(content.starts_with(b"Auto flush test"));
+    }
+
+    #[test]
+    fn test_concurrent_write_read() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        
+        // First write some initial data
+        {
+            let mut writer = ManagedAlignedWriter::new(Arc::clone(&file_manager), &file_path).unwrap();
+            let data: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
+            writer.write_all(&data).unwrap();
+            writer.flush().unwrap();
+        }
+        
+        // Now create a reader and writer using same file manager
+        let mut reader = crate::managed_aligned_reader::ManagedAlignedReader::new(
+            Arc::clone(&file_manager), 
+            &file_path
+        ).unwrap();
+        
+        // Read first part
+        let mut buf = vec![0u8; 1000];
+        reader.read_exact(&mut buf).unwrap();
+        
+        // Verify we read the correct data
+        let expected: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_io_tracker() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.dat");
+        
+        let file_manager = Arc::new(GlobalFileManager::new(ALIGNMENT));
+        let tracker = crate::io_stats::IoStatsTracker::new();
+        
+        let mut writer = ManagedAlignedWriter::new_with_tracker(
+            file_manager,
+            &file_path,
+            Some(tracker.clone())
+        ).unwrap();
+        
+        // Write some data
+        let data = vec![b'X'; 10_000];
+        writer.write_all(&data).unwrap();
+        
+        // Check that nothing is tracked yet (not flushed)
+        let (ops, bytes) = tracker.get_write_stats();
+        assert_eq!(ops, 0);
+        assert_eq!(bytes, 0);
+        
+        // Flush and check stats
+        writer.flush().unwrap();
+        let (ops, bytes) = tracker.get_write_stats();
+        assert!(ops > 0);
+        assert_eq!(bytes as usize, 10_000);
+        
+        // Write more data
+        writer.write_all(&data).unwrap();
+        writer.flush().unwrap();
+        
+        // Check updated stats
+        let (ops2, bytes2) = tracker.get_write_stats();
+        assert!(ops2 > ops);
+        assert_eq!(bytes2 as usize, 20_000);
+    }
+}

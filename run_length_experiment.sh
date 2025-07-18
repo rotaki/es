@@ -3,6 +3,10 @@
 # Experiment: Effect of run length (controlled by memory) on sorting performance
 # Tests lineitem CSV files at scale factors SF10 (10GB), SF100 (100GB), SF1000 (1TB), SF10000 (10TB)
 # Uses 40 threads and varies memory allocation to create different numbers of runs
+#
+# Sort configuration:
+#   Key columns: 10,5,1 (l_shipdate, l_extendedprice, l_partkey)
+#   Value columns: 0,3,11 (l_orderkey, l_linenumber, l_commitdate)
 
 # Configuration
 THREADS=40
@@ -39,6 +43,8 @@ if [ -f "lineitem_sf10.csv" ]; then
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
         -m "512MB,1GB,2GB,4GB,8GB" \
+        -k 10,5,1 \
+        -v 0,3,11 \
         lineitem_sf10.csv 2>&1 | tee -a "$LOG_FILE_SF10"
     
     echo "SF10 test completed" | tee -a "$SUMMARY_FILE"
@@ -64,6 +70,8 @@ if [ -f "lineitem_sf100.csv" ]; then
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
         -m "5GB,10GB,20GB,40GB,80GB" \
+        -k 10,5,1 \
+        -v 0,3,11 \
         lineitem_sf100.csv 2>&1 | tee -a "$LOG_FILE_SF100"
     
     echo "SF100 test completed" | tee -a "$SUMMARY_FILE"
@@ -89,6 +97,8 @@ echo -e "\n" | tee -a "$SUMMARY_FILE"
 #     cargo run --release --example lineitem_benchmark_cli -- \
 #         -t $THREADS \
 #         -m "2GB,4GB,8GB" \
+#         -k 10,5,1 \
+#         -v 0,3,11 \
 #         lineitem_sf1000.csv 2>&1 | tee -a "$LOG_FILE_SF1000"
 #     
 #     echo "SF1000 test completed" | tee -a "$SUMMARY_FILE"
@@ -114,6 +124,8 @@ echo -e "\n" | tee -a "$SUMMARY_FILE"
 #     cargo run --release --example lineitem_benchmark_cli -- \
 #         -t $THREADS \
 #         -m "1GB,2GB,4GB,8GB" \
+#         -k 10,5,1 \
+#         -v 0,3,11 \
 #         lineitem_sf10000.csv 2>&1 | tee -a "$LOG_FILE_SF10000"
 #     
 #     echo "SF10000 test completed" | tee -a "$SUMMARY_FILE"
