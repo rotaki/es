@@ -5,8 +5,8 @@ fn main() {
 
     // Create sorter with minimal configuration
     let num_threads = 4;
-    let buffer_size = 1024 * 1024; // 1MB buffer
-    let mut sorter = ExternalSorter::new(num_threads, buffer_size);
+    let max_memory = 1024 * 1024; // 1MB buffer
+    let mut sorter = ExternalSorter::new(num_threads, max_memory);
 
     // Generate test data
     println!("Generating test data...");

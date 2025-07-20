@@ -1,9 +1,6 @@
 //! Unified constants for alignment and buffer sizes used throughout the codebase
 
-use std::{
-    fs::File,
-    path::Path,
-};
+use std::{fs::File, path::Path};
 
 /// Direct I/O alignment requirement (typically 512 bytes on Linux)
 pub const DIRECT_IO_ALIGNMENT: usize = 512;

@@ -254,8 +254,8 @@ fn test_unicode_strings() {
 fn test_exact_buffer_boundary() {
     // Test when entries exactly fill the buffer
     let entry_size = 32; // Approximate size per entry
-    let buffer_size = entry_size * 100;
-    let mut sorter = ExternalSorter::new_with_dir(1, buffer_size, test_dir());
+    let max_memory = entry_size * 100;
+    let mut sorter = ExternalSorter::new_with_dir(1, max_memory, test_dir());
 
     let mut data = Vec::new();
     for i in 0..100 {

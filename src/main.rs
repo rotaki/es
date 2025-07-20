@@ -5,10 +5,10 @@ fn main() {
 
     // Configuration
     let num_threads = 4;
-    let buffer_size = 1024 * 1024; // 1MB buffer
+    let max_memory = 1024 * 1024; // 1MB buffer
 
     // Create sorter
-    let mut sorter = ExternalSorter::new(num_threads, buffer_size);
+    let mut sorter = ExternalSorter::new(num_threads, max_memory);
 
     // Create test data
     let mut data = Vec::new();

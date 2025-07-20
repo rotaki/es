@@ -240,14 +240,14 @@ impl Sorter for ExternalSorter {
         let mut handles = vec![];
 
         for (thread_id, scanner) in scanners.into_iter().enumerate() {
-            let buffer_size = (self.max_memory as f64 / self.num_threads as f64) as usize;
+            let per_thread_memory = (self.max_memory as f64 / self.num_threads as f64) as usize;
             let temp_dir = Arc::clone(&self.temp_dir_info).path.clone();
             let io_tracker = Arc::clone(&run_generation_io_tracker);
             let file_manager = Arc::clone(&self.file_manager);
 
             let handle = thread::spawn(move || {
                 let mut local_runs = Vec::new();
-                let mut sort_buffer = SortBufferImpl::new(buffer_size);
+                let mut sort_buffer = SortBufferImpl::new(per_thread_memory);
 
                 let run_path = temp_dir.join(format!("intermediate_{}.dat", thread_id));
                 let fd = file_manager
