@@ -1,14 +1,13 @@
-use libc::{c_void, fstat, off_t, pread, pwrite, O_DIRECT};
+use libc::{c_void, fstat, off_t, pread, pwrite};
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io;
 use std::os::fd::IntoRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use crate::constants::DIRECT_IO_ALIGNMENT;
+use crate::constants::{open_file_with_direct_io, DIRECT_IO_ALIGNMENT};
 
 /// Get the size of a file using its raw file descriptor
 pub fn file_size_fd(fd: RawFd) -> io::Result<u64> {
@@ -150,14 +149,7 @@ impl GlobalFileManager {
             return Ok(fd);
         }
 
-        // Open the file with Direct I/O
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .custom_flags(O_DIRECT) // Use Direct I/O
-            .open(&path_buf)?;
-
+        let file = open_file_with_direct_io(&path_buf)?;
         let fd = file.into_raw_fd();
 
         files.insert(path_buf, fd);

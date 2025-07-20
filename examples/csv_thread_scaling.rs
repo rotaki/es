@@ -131,7 +131,10 @@ fn main() -> Result<(), String> {
 
     // Show I/O efficiency summary
     println!("I/O Efficiency Analysis:");
-    println!("- Direct I/O buffer size: {} KB", DEFAULT_BUFFER_SIZE / 1024);
+    println!(
+        "- Direct I/O buffer size: {} KB",
+        DEFAULT_BUFFER_SIZE / 1024
+    );
     println!("- Note: IO MB/s > MB/s due to Direct I/O page alignment (4KB boundaries)");
 
     // // Detailed thread efficiency analysis (only for thread counts <= 8)

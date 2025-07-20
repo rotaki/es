@@ -16,7 +16,8 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use es::constants::DEFAULT_BUFFER_SIZE;
 use es::{
-    order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter, ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
+    order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter,
+    ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
 };
 use std::env;
 use std::path::Path;
@@ -759,11 +760,11 @@ fn print_entry(
         let (field_type, expected_size) = if is_parquet {
             // For Parquet, we need to know the data types to decode properly
             match col_idx {
-                0..=2 => ("Int64", 8),       // orderkey, partkey, suppkey
-                3 => ("Int32", 4),               // linenumber
-                4..=7 => ("Float64", 8), // quantity, extendedprice, discount, tax
-                10..=12 => ("Date32", 4),   // shipdate, commitdate, receiptdate
-                _ => ("Utf8", 0),                // Variable length strings
+                0..=2 => ("Int64", 8),    // orderkey, partkey, suppkey
+                3 => ("Int32", 4),        // linenumber
+                4..=7 => ("Float64", 8),  // quantity, extendedprice, discount, tax
+                10..=12 => ("Date32", 4), // shipdate, commitdate, receiptdate
+                _ => ("Utf8", 0),         // Variable length strings
             }
         } else {
             // For CSV, schema is defined in run_single_benchmark

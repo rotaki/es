@@ -1,18 +1,14 @@
 //! Parquet file input with Direct I/O support
-//!
-//! This allows reading Parquet files using Direct I/O for better performance
-//! and to bypass the OS page cache.
 
+use crate::constants::open_file_with_direct_io;
 use crate::{
-    aligned_reader::AlignedChunkReader, order_preserving_encoding::*,
-    IoStatsTracker, SortInput,
+    aligned_reader::AlignedChunkReader, order_preserving_encoding::*, IoStatsTracker, SortInput,
 };
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use std::fs::OpenOptions;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{IntoRawFd, RawFd};
 use std::path::Path;
 
 /// Configuration for Parquet Direct I/O reading
@@ -41,6 +37,15 @@ pub struct ParquetInputDirect {
     num_row_groups: usize,
 }
 
+impl Drop for ParquetInputDirect {
+    fn drop(&mut self) {
+        // Close the file descriptor
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
 impl ParquetInputDirect {
     /// Create a new ParquetInputDirect from a Parquet file with GlobalFileManager
     pub fn new(path: impl AsRef<Path>, config: ParquetDirectConfig) -> Result<Self, String> {
@@ -59,13 +64,10 @@ impl ParquetInputDirect {
         }
 
         // Open file with read.
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&path)
+        let file = open_file_with_direct_io(&path)
             .map_err(|e| format!("Failed to open Parquet file: {}", e))?;
 
-        let fd = file.as_raw_fd();
-        std::mem::forget(file); // Prevent file from closing
+        let fd = file.into_raw_fd();
 
         // Use ManagedAlignedChunkReader to read metadata
         let chunk_reader = AlignedChunkReader::new(fd)?;

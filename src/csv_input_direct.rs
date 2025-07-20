@@ -1,16 +1,12 @@
 //! CSV Input implementation using Direct I/O with BufReader
-//!
-//! This uses a file opened with O_DIRECT flag but wrapped in BufReader
-//! to handle line-oriented reading efficiently.
 
 use crate::aligned_reader::AlignedReader;
+use crate::constants::open_file_with_direct_io;
 use crate::{file_size_fd, order_preserving_encoding::*, IoStatsTracker, SortInput};
 use arrow::datatypes::{DataType, Schema};
 use chrono::Datelike;
-use std::fs::OpenOptions;
 use std::io::Seek;
-use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::{IntoRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -92,6 +88,15 @@ pub struct CsvInputDirect {
     file_size: u64,
 }
 
+impl Drop for CsvInputDirect {
+    fn drop(&mut self) {
+        // Close the file descriptor
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
 impl CsvInputDirect {
     /// Create a new CSV input reader using Direct I/O with GlobalFileManager
     pub fn new(path: impl AsRef<Path>, config: CsvDirectConfig) -> Result<Self, String> {
@@ -109,16 +114,10 @@ impl CsvInputDirect {
             return Err("At least one value column must be specified".to_string());
         }
 
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT) // Use Direct I/O
-            .open(path)
+        let file = open_file_with_direct_io(path)
             .map_err(|e| format!("Failed to open file: {}: {}", path.display(), e))?;
 
-        let fd = file.as_raw_fd();
-
-        // Forget the file to prevent it from being closed
-        std::mem::forget(file);
+        let fd = file.into_raw_fd();
 
         let file_size = file_size_fd(fd)
             .map_err(|e| format!("Failed to get file size: {}: {}", path.display(), e))?;

@@ -289,7 +289,8 @@ mod tests {
         assert_eq!(i128_decoded, vec![-1000000000, -1, 0, 1, 1000000000]);
 
         // Test f64 encoding with special values
-        let f64_values = [f64::NEG_INFINITY,
+        let f64_values = [
+            f64::NEG_INFINITY,
             -1000.0,
             -1.0,
             -0.0,
@@ -297,7 +298,8 @@ mod tests {
             1.0,
             1000.0,
             f64::INFINITY,
-            f64::NAN];
+            f64::NAN,
+        ];
         let mut f64_encoded: Vec<_> = f64_values
             .iter()
             .map(|&v| f64_to_order_preserving_bytes(v))

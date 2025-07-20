@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use crate::global_file_manager::GlobalFileManager;
 use crate::aligned_writer::AlignedWriter;
+use crate::global_file_manager::GlobalFileManager;
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;

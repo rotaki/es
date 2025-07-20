@@ -77,12 +77,12 @@ pub struct RunInfo {
 
 // Implementations
 pub mod aligned_buffer;
+pub mod aligned_reader;
+pub mod aligned_writer;
 pub mod constants;
 pub mod csv_input_direct;
 pub mod global_file_manager;
 pub mod io_stats;
-pub mod aligned_reader;
-pub mod aligned_writer;
 pub mod merge;
 pub mod order_preserving_encoding;
 pub mod parquet_input_direct;
@@ -91,10 +91,10 @@ pub mod sort_buffer;
 pub mod sorter;
 
 // Export the main types
+pub use aligned_reader::{AlignedChunkReader, AlignedReader};
+pub use aligned_writer::AlignedWriter;
 pub use csv_input_direct::{CsvDirectConfig, CsvInputDirect};
 pub use global_file_manager::{file_size_fd, pread_fd, pwrite_fd, GlobalFileManager};
 pub use io_stats::{IoStats, IoStatsTracker};
-pub use aligned_reader::{AlignedChunkReader, AlignedReader};
-pub use aligned_writer::AlignedWriter;
 pub use parquet_input_direct::{ParquetDirectConfig, ParquetInputDirect};
 pub use sorter::{ExternalSorter, Input, Output};

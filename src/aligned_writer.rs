@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::os::unix::io::RawFd;
 
 use crate::aligned_buffer::AlignedBuffer;
-use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
+use crate::constants::{align_up, DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT};
 use crate::global_file_manager::pwrite_fd;
 use crate::io_stats::IoStatsTracker;
 
@@ -144,11 +144,10 @@ impl Drop for AlignedWriter {
 mod tests {
     use super::*;
     use crate::aligned_reader::AlignedReader;
-    use libc::O_DIRECT;
-    use std::fs::{self, OpenOptions};
+    use crate::constants::open_file_with_direct_io;
+    use std::fs;
     use std::io::Read;
     use std::os::fd::IntoRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -156,11 +155,7 @@ mod tests {
         let file_path = dir.join(name);
         let file = fs::File::create(&file_path)?;
         drop(file);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(O_DIRECT)
-            .open(&file_path)?;
+        let file = open_file_with_direct_io(&file_path)?;
         Ok(file.into_raw_fd())
     }
 

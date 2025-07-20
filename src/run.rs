@@ -1,10 +1,10 @@
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::constants::{PAGE_SIZE, align_down};
-use crate::io_stats::IoStatsTracker;
 use crate::aligned_reader::AlignedReader;
 use crate::aligned_writer::AlignedWriter;
+use crate::constants::{align_down, PAGE_SIZE};
+use crate::io_stats::IoStatsTracker;
 use std::io::{Read, Write};
 use std::os::fd::RawFd;
 
@@ -295,10 +295,9 @@ impl Iterator for RunIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::open_file_with_direct_io;
     use crate::Run;
-    use std::fs::OpenOptions;
     use std::os::fd::IntoRawFd;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::path::PathBuf;
 
     fn get_test_path(name: &str) -> PathBuf {
@@ -312,15 +311,9 @@ mod tests {
 
     fn get_test_writer(name: &str) -> AlignedWriter {
         let path = get_test_path(name);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(&path)
-            .expect("Failed to open test file");
+        let file = open_file_with_direct_io(&path).expect("Failed to open test file");
         let fd = file.into_raw_fd();
-        
+
         AlignedWriter::from_raw_fd(fd).unwrap()
     }
 

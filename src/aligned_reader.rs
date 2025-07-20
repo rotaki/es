@@ -6,7 +6,9 @@ use parquet::errors::Result as ParquetResult;
 use parquet::file::reader::{ChunkReader, Length};
 
 use crate::aligned_buffer::AlignedBuffer;
-use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_down, align_up, offset_within_block};
+use crate::constants::{
+    align_down, align_up, offset_within_block, DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT,
+};
 use crate::file_size_fd;
 use crate::global_file_manager::pread_fd;
 use crate::io_stats::IoStatsTracker;
@@ -98,7 +100,7 @@ impl AlignedReader {
                 // We've reached EOF - just round up to next alignment boundary
                 let next_aligned = align_up(
                     (self.file_offset + bytes_read as u64) as usize,
-                    DEFAULT_BUFFER_SIZE
+                    DEFAULT_BUFFER_SIZE,
                 ) as u64;
                 self.file_offset = next_aligned;
             } else {
@@ -348,12 +350,9 @@ impl ChunkReader for AlignedChunkReader {
 
     fn get_read(&self, start: u64) -> ParquetResult<Self::T> {
         // Create a new reader starting at the specified position
-        let reader = AlignedReader::from_raw_fd_with_start_position(
-            self.fd,
-            start,
-            self.io_tracker.clone(),
-        )
-        .map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
+        let reader =
+            AlignedReader::from_raw_fd_with_start_position(self.fd, start, self.io_tracker.clone())
+                .map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
 
         Ok(reader)
     }
@@ -370,12 +369,12 @@ impl ChunkReader for AlignedChunkReader {
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::open_file_with_direct_io;
+
     use super::*;
-    use libc::O_DIRECT;
-    use std::fs::{File, OpenOptions};
+    use std::fs::File;
     use std::io::Write;
     use std::os::fd::{AsRawFd, IntoRawFd};
-    use std::os::unix::fs::OpenOptionsExt;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -392,12 +391,7 @@ mod tests {
         file.sync_all()?;
         drop(file); // Close the write file
 
-        // Open for reading with O_DIRECT
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(O_DIRECT)
-            .open(&path)?;
-
+        let file = open_file_with_direct_io(&path)?;
         let fd = file.into_raw_fd(); // Transfer ownership to get raw fd
         Ok((fd, data))
     }
@@ -409,11 +403,7 @@ mod tests {
         file.sync_all()?;
         drop(file);
 
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(O_DIRECT)
-            .open(&path)?;
-
+        let file = open_file_with_direct_io(&path)?;
         let fd = file.into_raw_fd();
         Ok(fd)
     }
@@ -723,14 +713,12 @@ mod tests {
         assert_eq!(reader.position(), 1000);
 
         // Test SeekFrom::Current with positive offset
-        let pos =
-            <AlignedReader as Seek>::seek(&mut reader, SeekFrom::Current(500)).unwrap();
+        let pos = <AlignedReader as Seek>::seek(&mut reader, SeekFrom::Current(500)).unwrap();
         assert_eq!(pos, 1500);
         assert_eq!(reader.position(), 1500);
 
         // Test SeekFrom::Current with negative offset
-        let pos =
-            <AlignedReader as Seek>::seek(&mut reader, SeekFrom::Current(-200)).unwrap();
+        let pos = <AlignedReader as Seek>::seek(&mut reader, SeekFrom::Current(-200)).unwrap();
         assert_eq!(pos, 1300);
         assert_eq!(reader.position(), 1300);
 
@@ -816,8 +804,7 @@ mod tests {
         let tracker = IoStatsTracker::new();
 
         let chunk_reader =
-            AlignedChunkReader::new_with_tracker(file.as_raw_fd(), Some(tracker.clone()))
-                .unwrap();
+            AlignedChunkReader::new_with_tracker(file.as_raw_fd(), Some(tracker.clone())).unwrap();
 
         // Read some chunks
         let _ = chunk_reader.get_bytes(0, 1000).unwrap();
@@ -976,13 +963,18 @@ mod tests {
     fn test_direct_io_alignment_edge_cases() {
         let temp_dir = TempDir::new().unwrap();
         // Test various file sizes around alignment boundaries
-        let test_cases = [(DIRECT_IO_ALIGNMENT - 1, "one byte less than alignment"),
+        let test_cases = [
+            (DIRECT_IO_ALIGNMENT - 1, "one byte less than alignment"),
             (DIRECT_IO_ALIGNMENT, "exactly aligned"),
             (DIRECT_IO_ALIGNMENT + 1, "one byte more than alignment"),
-            (DIRECT_IO_ALIGNMENT * 2 - 1, "one byte less than 2x alignment"),
+            (
+                DIRECT_IO_ALIGNMENT * 2 - 1,
+                "one byte less than 2x alignment",
+            ),
             (DIRECT_IO_ALIGNMENT * 2, "exactly 2x aligned"),
             (1, "single byte"),
-            (10, "very small file")];
+            (10, "very small file"),
+        ];
 
         for (idx, (size, description)) in test_cases.iter().enumerate() {
             let data = vec![b'A'; *size];
