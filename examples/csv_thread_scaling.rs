@@ -8,12 +8,12 @@
 //!   -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 1)
 //!   -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)
 //!   -d, --delimiter <CHAR>       CSV delimiter character (default: ,)
-//!   -b, --buffer-size <KB>       Buffer size in KB for direct I/O (default: 256)
 //!   --headers                    CSV file has headers
 //!   --help                       Show this help message
 
 use arrow::datatypes::{DataType, Field, Schema};
-use es::{CsvDirectConfig, CsvInputDirect, GlobalFileManager, IoStatsTracker, SortInput};
+use es::constants::DEFAULT_BUFFER_SIZE;
+use es::{CsvDirectConfig, CsvInputDirect, IoStatsTracker, SortInput};
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -30,7 +30,6 @@ struct Config {
     value_columns: Vec<usize>,
     thread_counts: Vec<usize>,
     delimiter: u8,
-    buffer_size_kb: usize,
     has_headers: bool,
 }
 
@@ -42,7 +41,6 @@ impl Default for Config {
             value_columns: vec![1],
             thread_counts: vec![1, 2, 4, 8, 16],
             delimiter: b',',
-            buffer_size_kb: 256,
             has_headers: false,
         }
     }
@@ -72,7 +70,7 @@ fn main() -> Result<(), String> {
     println!("Value columns: {:?}", config.value_columns);
     println!("Thread counts: {:?}", config.thread_counts);
     println!("Delimiter: '{}'", config.delimiter as char);
-    println!("Direct I/O buffer: {} KB", config.buffer_size_kb);
+    println!("Direct I/O buffer: {} KB", DEFAULT_BUFFER_SIZE / 1024);
     println!();
 
     // Create a generic schema for the CSV file
@@ -85,7 +83,6 @@ fn main() -> Result<(), String> {
     direct_config.key_columns = config.key_columns.clone();
     direct_config.value_columns = config.value_columns.clone();
     direct_config.has_headers = config.has_headers;
-    direct_config.buffer_size = config.buffer_size_kb * 1024;
 
     // Run scaling tests
     println!("Direct I/O CSV Input Scaling:");
@@ -98,7 +95,7 @@ fn main() -> Result<(), String> {
     let mut baseline_time = 0.0;
     let mut total_rows_for_check = 0;
     for &num_threads in &config.thread_counts {
-        let csv_direct = CsvInputDirect::new(&config.csv_file, direct_config.clone(), Arc::new(GlobalFileManager::new(512)))?; // Enable I/O tracking
+        let csv_direct = CsvInputDirect::new(&config.csv_file, direct_config.clone())?; // Enable I/O tracking
 
         let io_tracker = Some(IoStatsTracker::new()); // Create I/O tracker
         let (duration, throughput_rows, throughput_mb, row_count, io_mb_s, iops) =
@@ -134,7 +131,7 @@ fn main() -> Result<(), String> {
 
     // Show I/O efficiency summary
     println!("I/O Efficiency Analysis:");
-    println!("- Direct I/O buffer size: {} KB", config.buffer_size_kb);
+    println!("- Direct I/O buffer size: {} KB", DEFAULT_BUFFER_SIZE / 1024);
     println!("- Note: IO MB/s > MB/s due to Direct I/O page alignment (4KB boundaries)");
 
     // // Detailed thread efficiency analysis (only for thread counts <= 8)
@@ -219,15 +216,6 @@ fn parse_args() -> Result<Config, String> {
                 i += 1;
                 config.delimiter = parse_delimiter(&args[i])?;
             }
-            "-b" | "--buffer-size" => {
-                if i + 1 >= args.len() {
-                    return Err("Missing value for buffer-size".to_string());
-                }
-                i += 1;
-                config.buffer_size_kb = args[i]
-                    .parse()
-                    .map_err(|_| format!("Invalid buffer size: {}", args[i]))?;
-            }
             "--headers" => {
                 config.has_headers = true;
             }
@@ -275,7 +263,6 @@ fn print_usage(program_name: &str) {
     );
     println!("  -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)");
     println!("  -d, --delimiter <CHAR>       CSV delimiter character (default: ,)");
-    println!("  -b, --buffer-size <KB>       Buffer size in KB for direct I/O (default: 256)");
     println!("  --headers                    CSV file has headers");
     println!("  -h, --help                   Show this help message");
     println!();
@@ -309,7 +296,7 @@ fn parse_thread_list(s: &str) -> Result<Vec<usize>, String> {
         Ok(mut t) => {
             t.sort_unstable();
             t.dedup();
-            if t.iter().any(|&x| x == 0) {
+            if t.contains(&0) {
                 Err("Thread count must be greater than 0".to_string())
             } else {
                 Ok(t)
@@ -590,7 +577,7 @@ fn create_generic_schema(config: &Config) -> Result<Arc<Schema>, String> {
 
     // Create a simple schema with all columns as strings
     let fields: Vec<Field> = (0..fields_count)
-        .map(|i| Field::new(&format!("col_{}", i), DataType::Utf8, false))
+        .map(|i| Field::new(format!("col_{}", i), DataType::Utf8, false))
         .collect();
 
     Ok(Arc::new(Schema::new(fields)))

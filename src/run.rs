@@ -1,17 +1,12 @@
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-// Define PAGE_SIZE locally since we're not using aligned_reader anymore
-const PAGE_SIZE: usize = 4096;
-use crate::global_file_manager::GlobalFileManager;
-use crate::managed_aligned_reader::ManagedAlignedReader;
-use crate::managed_aligned_writer::ManagedAlignedWriter;
-#[cfg(test)]
-use tempfile::tempdir;
+use crate::constants::{PAGE_SIZE, align_down};
 use crate::io_stats::IoStatsTracker;
+use crate::aligned_reader::AlignedReader;
+use crate::aligned_writer::AlignedWriter;
 use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::os::fd::RawFd;
 
 // Sparse index entry
 #[derive(Debug, Clone)]
@@ -23,9 +18,8 @@ pub struct IndexEntry {
 
 // File-based run implementation with direct I/O
 pub struct RunImpl {
-    path: PathBuf,
-    file_manager: Arc<GlobalFileManager>,
-    writer: Option<ManagedAlignedWriter>,
+    fd: RawFd,
+    writer: Option<AlignedWriter>,
     total_entries: usize,
     start_bytes: usize,
     total_bytes: usize,
@@ -35,14 +29,13 @@ pub struct RunImpl {
 }
 
 impl RunImpl {
-    pub fn from_writer_with_manager(writer: ManagedAlignedWriter, file_manager: Arc<GlobalFileManager>) -> Result<Self, String> {
+    pub fn from_writer(writer: AlignedWriter) -> Result<Self, String> {
         // Get current position in the file
         let start_bytes = writer.position() as usize;
-        let path = writer.path().to_path_buf();
+        let fd = writer.get_fd();
 
         Ok(Self {
-            path,
-            file_manager,
+            fd,
             writer: Some(writer),
             total_entries: 0,
             start_bytes,
@@ -53,7 +46,7 @@ impl RunImpl {
         })
     }
 
-    pub fn finalize_write(&mut self) -> ManagedAlignedWriter {
+    pub fn finalize_write(&mut self) -> AlignedWriter {
         // Sort sparse index by file offset before finalizing
         self.sparse_index
             .sort_unstable_by_key(|entry| entry.file_offset);
@@ -70,10 +63,6 @@ impl RunImpl {
 
     pub fn total_bytes(&self) -> usize {
         self.total_bytes
-    }
-
-    pub fn path(&self) -> &PathBuf {
-        &self.path
     }
 
     fn find_start_position(&self, lower_bound: &[u8]) -> Option<usize> {
@@ -168,16 +157,9 @@ impl super::Run for RunImpl {
 
         // Open for reading with direct I/O, optionally with tracker
         let mut reader = if let Some(tracker) = io_tracker {
-            ManagedAlignedReader::new_with_tracker(
-                self.file_manager.clone(),
-                &self.path,
-                Some(tracker)
-            ).unwrap()
+            AlignedReader::from_raw_fd_with_tracker(self.fd, Some(tracker)).unwrap()
         } else {
-            ManagedAlignedReader::new(
-                self.file_manager.clone(),
-                &self.path
-            ).unwrap()
+            AlignedReader::from_raw_fd(self.fd).unwrap()
         };
 
         // Use sparse index to seek to a good starting position
@@ -192,7 +174,7 @@ impl super::Run for RunImpl {
         // Seek to the start position if needed
         if start_offset > 0 {
             // Align to page boundary for direct I/O
-            let aligned_offset = (start_offset / PAGE_SIZE) * PAGE_SIZE;
+            let aligned_offset = align_down(start_offset as u64, PAGE_SIZE as u64) as usize;
             let skip_bytes = start_offset - aligned_offset;
 
             // Seek to aligned position
@@ -225,7 +207,7 @@ impl super::Run for RunImpl {
 }
 
 struct RunIterator {
-    reader: ManagedAlignedReader,
+    reader: AlignedReader,
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
     bytes_read: usize,
@@ -314,6 +296,9 @@ impl Iterator for RunIterator {
 mod tests {
     use super::*;
     use crate::Run;
+    use std::fs::OpenOptions;
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::PathBuf;
 
     fn get_test_path(name: &str) -> PathBuf {
@@ -325,17 +310,24 @@ mod tests {
         test_dir.join("test_run.dat")
     }
 
-    fn get_test_writer(name: &str) -> (ManagedAlignedWriter, Arc<GlobalFileManager>) {
+    fn get_test_writer(name: &str) -> AlignedWriter {
         let path = get_test_path(name);
-        let file_manager = Arc::new(GlobalFileManager::new(512));
-        let writer = ManagedAlignedWriter::new(file_manager.clone(), &path).unwrap();
-        (writer, file_manager)
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .custom_flags(libc::O_DIRECT)
+            .open(&path)
+            .expect("Failed to open test file");
+        let fd = file.into_raw_fd();
+        
+        AlignedWriter::from_raw_fd(fd).unwrap()
     }
 
     #[test]
     fn test_basic_append_and_scan() {
-        let (writer, file_manager) = get_test_writer("basic");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("basic");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Append some entries
         run.append(b"key1".to_vec(), b"value1".to_vec());
@@ -352,8 +344,8 @@ mod tests {
 
     #[test]
     fn test_empty_run() {
-        let (writer, file_manager) = get_test_writer("empty");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("empty");
+        let mut run = RunImpl::from_writer(writer).unwrap();
         run.finalize_write();
 
         // For empty runs, total_bytes should be 0
@@ -367,8 +359,8 @@ mod tests {
 
     #[test]
     fn test_scan_range_filtering() {
-        let (writer, file_manager) = get_test_writer("range");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("range");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Append entries
         run.append(b"a".to_vec(), b"1".to_vec());
@@ -402,8 +394,8 @@ mod tests {
 
     #[test]
     fn test_large_entries() {
-        let (writer, file_manager) = get_test_writer("large");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("large");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Create large key and value
         let large_key = vec![b'k'; 1000];
@@ -427,8 +419,8 @@ mod tests {
 
     #[test]
     fn test_page_buffer_flushing() {
-        let (writer, file_manager) = get_test_writer("page_flush");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("page_flush");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add entries that will trigger page flushes
         // Page size is 4096 bytes, each entry is 8 bytes + key + value
@@ -442,9 +434,9 @@ mod tests {
         run.finalize_write();
 
         // Verify all entries are present
-        let mut iter = run.scan_range(&[], &[]);
+        let iter = run.scan_range(&[], &[]);
         let mut count = 0;
-        while let Some((key, value)) = iter.next() {
+        for (key, value) in iter {
             assert_eq!(key, entries[count].0);
             assert_eq!(value, entries[count].1);
             count += 1;
@@ -454,8 +446,8 @@ mod tests {
 
     #[test]
     fn test_multiple_scans() {
-        let (writer, file_manager) = get_test_writer("multi_scan");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("multi_scan");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         run.append(b"a".to_vec(), b"1".to_vec());
         run.append(b"b".to_vec(), b"2".to_vec());
@@ -483,10 +475,10 @@ mod tests {
 
     #[test]
     fn test_in_memory_tracking() {
-        let (writer, file_manager) = get_test_writer("in_memory");
+        let writer = get_test_writer("in_memory");
         let entry_count = 10;
 
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Track bytes as we add entries
         let mut expected_bytes = 0;
@@ -501,17 +493,13 @@ mod tests {
         assert_eq!(run.total_entries, entry_count);
         assert_eq!(run.total_bytes, expected_bytes);
 
-        let writer = run.finalize_write();
-
-        // The writer knows the path even if file doesn't exist yet
-        // For Direct I/O, file is created on first write
-        assert!(writer.path().to_str().unwrap().contains("in_memory"));
+        run.finalize_write();
     }
 
     #[test]
     fn test_binary_data() {
-        let (writer, file_manager) = get_test_writer("binary");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("binary");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Test with binary data including null bytes
         let binary_key = vec![0, 1, 2, 3, 255, 254, 253, 252];
@@ -535,8 +523,8 @@ mod tests {
 
     #[test]
     fn test_exact_page_boundary() {
-        let (writer, file_manager) = get_test_writer("page_boundary");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("page_boundary");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Calculate entry size to exactly fill pages
         // Each entry: 4 bytes key_len + 4 bytes value_len + key + value
@@ -578,8 +566,8 @@ mod tests {
 
     #[test]
     fn test_sample_method() {
-        let (writer, file_manager) = get_test_writer("sample");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("sample");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add many entries
         for i in 0..100 {
@@ -591,7 +579,7 @@ mod tests {
 
         // Test sampling - should return samples from sparse index
         let samples = run.samples();
-        assert!(samples.len() > 0);
+        assert!(!samples.is_empty());
 
         // Verify samples are ordered
         for i in 1..samples.len() {
@@ -604,8 +592,8 @@ mod tests {
 
     #[test]
     fn test_finalize_idempotent() {
-        let (writer, file_manager) = get_test_writer("finalize_idempotent");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("finalize_idempotent");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         run.append(b"key".to_vec(), b"value".to_vec());
         run.finalize_write();
@@ -618,8 +606,8 @@ mod tests {
 
     #[test]
     fn test_unicode_keys_values() {
-        let (writer, file_manager) = get_test_writer("unicode");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("unicode");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Test with various unicode strings
         let test_cases = vec![
@@ -645,8 +633,8 @@ mod tests {
 
     #[test]
     fn test_scan_after_partial_read() {
-        let (writer, file_manager) = get_test_writer("partial_read");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("partial_read");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add entries
         for i in 0..10 {
@@ -672,8 +660,8 @@ mod tests {
 
     #[test]
     fn test_empty_key_value() {
-        let (writer, file_manager) = get_test_writer("empty_kv");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("empty_kv");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Test empty key with non-empty value
         run.append(vec![], b"value_for_empty_key".to_vec());
@@ -712,8 +700,8 @@ mod tests {
 
     #[test]
     fn test_stress_many_small_entries() {
-        let (writer, file_manager) = get_test_writer("stress_small");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("stress_small");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add 10,000 small entries
         let count = 10_000;
@@ -747,8 +735,8 @@ mod tests {
         for i in 0..5 {
             let success_count = Arc::clone(&success_count);
             let handle = thread::spawn(move || {
-                let (writer, file_manager) = get_test_writer(&format!("concurrent_{}", i));
-                let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+                let writer = get_test_writer(&format!("concurrent_{}", i));
+                let mut run = RunImpl::from_writer(writer).unwrap();
 
                 for j in 0..100 {
                     let key = format!("thread{}_{:03}", i, j).into_bytes();
@@ -772,8 +760,8 @@ mod tests {
 
     #[test]
     fn test_max_key_value_sizes() {
-        let (writer, file_manager) = get_test_writer("max_sizes");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("max_sizes");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Test with maximum practical sizes
         let max_key = vec![b'k'; 1_000_000]; // 1MB key
@@ -795,8 +783,8 @@ mod tests {
 
     #[test]
     fn test_alternating_large_small() {
-        let (writer, file_manager) = get_test_writer("alternating");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("alternating");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Alternate between large and small entries
         for i in 0..100 {
@@ -830,10 +818,10 @@ mod tests {
 
     #[test]
     fn test_run_without_metadata() {
-        let (writer, file_manager) = get_test_writer("no_metadata");
+        let writer = get_test_writer("no_metadata");
 
         // Create a run with data
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let mut run = RunImpl::from_writer(writer).unwrap();
         for i in 0..10 {
             run.append(format!("{:02}", i).into_bytes(), b"value".to_vec());
         }
@@ -850,8 +838,8 @@ mod tests {
 
     #[test]
     fn test_scan_with_equal_bounds() {
-        let (writer, file_manager) = get_test_writer("equal_bounds");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("equal_bounds");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         run.append(b"a".to_vec(), b"1".to_vec());
         run.append(b"b".to_vec(), b"2".to_vec());
@@ -866,8 +854,8 @@ mod tests {
 
     #[test]
     fn test_duplicate_keys() {
-        let (writer, file_manager) = get_test_writer("duplicate_keys");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("duplicate_keys");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add duplicate keys
         run.append(b"key".to_vec(), b"value1".to_vec());
@@ -889,8 +877,8 @@ mod tests {
 
     #[test]
     fn test_reservoir_sampling_sparse_index() {
-        let (writer, file_manager) = get_test_writer("reservoir_sampling");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("reservoir_sampling");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add many entries to test reservoir sampling
         // Should sample 100 entries uniformly
@@ -953,8 +941,8 @@ mod tests {
 
     #[test]
     fn test_sparse_index_seek() {
-        let (writer, file_manager) = get_test_writer("sparse_seek");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("sparse_seek");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Add enough entries to build a sparse index
         for i in 0..5000 {
@@ -976,14 +964,14 @@ mod tests {
 
         // Verify all results are >= lower bound
         for (key, _) in &results {
-            assert!(&key[..] >= &lower[..]);
+            assert!(key[..] >= lower[..]);
         }
     }
 
     #[test]
     fn test_scan_range_many_duplicate_keys() {
-        let (writer, file_manager) = get_test_writer("many_duplicates");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("many_duplicates");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Create a pattern with many duplicates
         // Keys: 100 'a's, 200 'b's, 150 'c's, 100 'd's, 50 'e's
@@ -1075,8 +1063,8 @@ mod tests {
 
     #[test]
     fn test_scan_range_duplicate_keys_with_sparse_index() {
-        let (writer, file_manager) = get_test_writer("duplicates_sparse");
-        let mut run = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let writer = get_test_writer("duplicates_sparse");
+        let mut run = RunImpl::from_writer(writer).unwrap();
 
         // Create enough duplicate data to trigger sparse indexing
         // Each entry is about 108 bytes (8 + 3 + 97)
@@ -1130,10 +1118,10 @@ mod tests {
 
     #[test]
     fn test_multiple_runs_same_file_reused_writer() {
-        let (writer, file_manager) = get_test_writer("multiple_runs_reused");
+        let writer = get_test_writer("multiple_runs_reused");
 
         // First run: create new file
-        let mut run1 = RunImpl::from_writer_with_manager(writer, file_manager.clone()).unwrap();
+        let mut run1 = RunImpl::from_writer(writer).unwrap();
 
         // Write keys 00-09
         for i in 0..10 {
@@ -1144,13 +1132,10 @@ mod tests {
 
         // Take the writer to reuse it
         let writer = run1.finalize_write();
-        println!(
-            "Writer position after run1: {}",
-            writer.position()
-        );
+        println!("Writer position after run1: {}", writer.position());
 
         // Second run: reuse the writer
-        let mut run2 = RunImpl::from_writer_with_manager(writer, file_manager.clone()).unwrap();
+        let mut run2 = RunImpl::from_writer(writer).unwrap();
 
         // Write keys 10-19
         for i in 10..20 {
@@ -1163,7 +1148,7 @@ mod tests {
         let writer = run2.finalize_write();
 
         // Third run: reuse the writer again
-        let mut run3 = RunImpl::from_writer_with_manager(writer, file_manager).unwrap();
+        let mut run3 = RunImpl::from_writer(writer).unwrap();
 
         // Write keys 20-29
         for i in 20..30 {

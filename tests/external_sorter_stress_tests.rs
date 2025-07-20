@@ -134,12 +134,12 @@ fn test_extreme_thread_counts() {
 }
 
 #[test]
-fn test_buffer_size_edge_cases() {
+fn test_max_memory_edge_cases() {
     // Test various buffer sizes including very small and exact multiples
-    let buffer_sizes = [1024, 4096, 8192];
+    let max_memories = [1024, 4096, 8192];
 
-    for &buffer_size in &buffer_sizes {
-        let mut sorter = ExternalSorter::new_with_dir(2, buffer_size, test_dir());
+    for &max_memory in &max_memories {
+        let mut sorter = ExternalSorter::new_with_dir(2, max_memory, test_dir());
 
         let mut data = Vec::new();
         for i in 0..500 {
@@ -273,10 +273,10 @@ fn test_random_binary_keys() {
     for _ in 0..5000 {
         // Random binary keys of varying lengths
         let key_len = rng.random_range(1..50);
-        let key: Vec<u8> = (0..key_len).map(|_| rng.gen()).collect();
+        let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
 
         let value_len = rng.random_range(1..100);
-        let value: Vec<u8> = (0..value_len).map(|_| rng.gen()).collect();
+        let value: Vec<u8> = (0..value_len).map(|_| rng.random()).collect();
 
         data.push((key, value));
     }

@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn test_order_preserving_encoding() {
         // Test i32 encoding
-        let i32_values = vec![-1000, -1, 0, 1, 1000];
+        let i32_values = [-1000, -1, 0, 1, 1000];
         let mut i32_encoded: Vec<_> = i32_values
             .iter()
             .map(|&v| i32_to_order_preserving_bytes(v))
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(i32_decoded, vec![-1000, -1, 0, 1, 1000]);
 
         // Test i64 encoding
-        let i64_values = vec![-1000000, -1, 0, 1, 1000000];
+        let i64_values = [-1000000, -1, 0, 1, 1000000];
         let mut i64_encoded: Vec<_> = i64_values
             .iter()
             .map(|&v| i64_to_order_preserving_bytes(v))
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(i64_decoded, vec![-1000000, -1, 0, 1, 1000000]);
 
         // Test i128 encoding
-        let i128_values = vec![-1000000000, -1, 0, 1, 1000000000];
+        let i128_values = [-1000000000, -1, 0, 1, 1000000000];
         let mut i128_encoded: Vec<_> = i128_values
             .iter()
             .map(|&v| i128_to_order_preserving_bytes(v))
@@ -289,8 +289,7 @@ mod tests {
         assert_eq!(i128_decoded, vec![-1000000000, -1, 0, 1, 1000000000]);
 
         // Test f64 encoding with special values
-        let f64_values = vec![
-            f64::NEG_INFINITY,
+        let f64_values = [f64::NEG_INFINITY,
             -1000.0,
             -1.0,
             -0.0,
@@ -298,8 +297,7 @@ mod tests {
             1.0,
             1000.0,
             f64::INFINITY,
-            f64::NAN,
-        ];
+            f64::NAN];
         let mut f64_encoded: Vec<_> = f64_values
             .iter()
             .map(|&v| f64_to_order_preserving_bytes(v))

@@ -220,8 +220,7 @@ fn test_binary_data() {
 fn test_unicode_strings() {
     let mut sorter = ExternalSorter::new_with_dir(2, 1024, test_dir());
 
-    let test_strings = vec![
-        "zebra",
+    let test_strings = ["zebra",
         "apple",
         "ñoño",
         "中文",
@@ -230,8 +229,7 @@ fn test_unicode_strings() {
         "Åpple",
         "école",
         "Москва",
-        "مرحبا",
-    ];
+        "مرحبا"];
 
     let mut data = Vec::new();
     for (i, s) in test_strings.iter().enumerate() {

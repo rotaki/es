@@ -14,9 +14,9 @@
 //!   --help                       Show this help message
 
 use arrow::datatypes::{DataType, Field, Schema};
+use es::constants::DEFAULT_BUFFER_SIZE;
 use es::{
-    order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter,
-    GlobalFileManager, ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
+    order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter, ParquetDirectConfig, ParquetInputDirect, SortInput, Sorter,
 };
 use std::env;
 use std::path::Path;
@@ -33,7 +33,6 @@ struct Config {
     memory_sizes: Vec<usize>,
     delimiter: u8,
     has_headers: bool,
-    buffer_size: usize,
 }
 
 impl Default for Config {
@@ -48,7 +47,6 @@ impl Default for Config {
             memory_sizes: vec![4096, 8192], // MB
             delimiter: b',',
             has_headers: true,
-            buffer_size: 64 * 1024, // 64KB default
         }
     }
 }
@@ -169,18 +167,6 @@ fn parse_args() -> Config {
                 }
                 config.delimiter = args[i].as_bytes()[0];
             }
-            "-b" | "--buffer-size" => {
-                i += 1;
-                if i >= args.len() {
-                    eprintln!("Error: --buffer-size requires an argument");
-                    show_usage();
-                }
-                let kb: usize = args[i].parse().unwrap_or_else(|_| {
-                    eprintln!("Error: Invalid buffer size");
-                    show_usage();
-                });
-                config.buffer_size = kb * 1024;
-            }
             "--headers" => {
                 config.has_headers = true;
             }
@@ -261,7 +247,6 @@ fn show_usage() -> ! {
     println!("  -t, --threads <LIST>         Comma-separated thread counts to test (default: 1,2,4,8,16,32)");
     println!("  -m, --memory <LIST>          Comma-separated memory sizes (e.g., 1GB,2GB,4GB or 1024,2048,4096)");
     println!("                               Default: 1GB,2GB,4GB,8GB,16GB,32GB");
-    println!("  -b, --buffer-size <KB>       Direct I/O buffer size in KB (default: 64)");
     println!(
         "  -d, --delimiter <CHAR>       CSV delimiter character (default: |) - ignored for Parquet"
     );
@@ -372,7 +357,7 @@ fn run_benchmark(config: Config) -> Result<(), String> {
         );
         println!("  Has headers: {}", config.has_headers);
     }
-    println!("  Direct I/O buffer: {} KB", config.buffer_size / 1024);
+    println!("  Direct I/O buffer: {} KB", DEFAULT_BUFFER_SIZE / 1024);
     println!("  Thread counts to test: {:?}", config.thread_counts);
     println!(
         "  Memory sizes to test: {}",
@@ -442,7 +427,7 @@ fn run_single_benchmark(
     );
     println!(
         "  Direct I/O buffer: {} KB",
-        bytes_to_human_readable(config.buffer_size)
+        bytes_to_human_readable(DEFAULT_BUFFER_SIZE)
     );
 
     // Create input based on file type
@@ -450,9 +435,8 @@ fn run_single_benchmark(
         let mut parquet_config = ParquetDirectConfig::default();
         parquet_config.key_columns = config.key_columns.clone();
         parquet_config.value_columns = config.value_columns.clone();
-        parquet_config.buffer_size = config.buffer_size;
 
-        let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config, Arc::new(GlobalFileManager::new(512)))?;
+        let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config)?;
         println!("  Total rows: {}", parquet_input.len());
         Box::new(parquet_input)
     } else {
@@ -481,9 +465,8 @@ fn run_single_benchmark(
         csv_config.key_columns = config.key_columns.clone();
         csv_config.value_columns = config.value_columns.clone();
         csv_config.has_headers = config.has_headers;
-        csv_config.buffer_size = config.buffer_size;
 
-        Box::new(CsvInputDirect::new(&config.file_path, csv_config, Arc::new(GlobalFileManager::new(512)))?)
+        Box::new(CsvInputDirect::new(&config.file_path, csv_config)?)
     };
 
     let mut sorter = ExternalSorter::new(threads, memory_mb * 1024 * 1024);
@@ -776,19 +759,19 @@ fn print_entry(
         let (field_type, expected_size) = if is_parquet {
             // For Parquet, we need to know the data types to decode properly
             match col_idx {
-                0 | 1 | 2 => ("Int64", 8),       // orderkey, partkey, suppkey
+                0..=2 => ("Int64", 8),       // orderkey, partkey, suppkey
                 3 => ("Int32", 4),               // linenumber
-                4 | 5 | 6 | 7 => ("Float64", 8), // quantity, extendedprice, discount, tax
-                10 | 11 | 12 => ("Date32", 4),   // shipdate, commitdate, receiptdate
+                4..=7 => ("Float64", 8), // quantity, extendedprice, discount, tax
+                10..=12 => ("Date32", 4),   // shipdate, commitdate, receiptdate
                 _ => ("Utf8", 0),                // Variable length strings
             }
         } else {
             // For CSV, schema is defined in run_single_benchmark
             match col_idx {
-                0 | 1 | 2 => ("Int64", 8),
+                0..=2 => ("Int64", 8),
                 3 => ("Int32", 4),
-                4 | 5 | 6 | 7 => ("Float64", 8),
-                10 | 11 | 12 => ("Date32", 4),
+                4..=7 => ("Float64", 8),
+                10..=12 => ("Date32", 4),
                 _ => ("Utf8", 0),
             }
         };
@@ -856,18 +839,18 @@ fn print_entry(
 
         let (field_type, expected_size) = if is_parquet {
             match col_idx {
-                0 | 1 | 2 => ("Int64", 8),
+                0..=2 => ("Int64", 8),
                 3 => ("Int32", 4),
-                4 | 5 | 6 | 7 => ("Float64", 8),
-                10 | 11 | 12 => ("Date32", 4),
+                4..=7 => ("Float64", 8),
+                10..=12 => ("Date32", 4),
                 _ => ("Utf8", 0),
             }
         } else {
             match col_idx {
-                0 | 1 | 2 => ("Int64", 8),
+                0..=2 => ("Int64", 8),
                 3 => ("Int32", 4),
-                4 | 5 | 6 | 7 => ("Float64", 8),
-                10 | 11 | 12 => ("Date32", 4),
+                4..=7 => ("Float64", 8),
+                10..=12 => ("Date32", 4),
                 _ => ("Utf8", 0),
             }
         };

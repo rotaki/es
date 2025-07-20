@@ -111,11 +111,11 @@ mod tests {
     #[test]
     fn test_aligned_buffer_read_write() {
         let mut buffer = AlignedBuffer::new(1024, 512).unwrap();
-        
+
         // Write data
         let data = b"Hello, aligned buffer!";
         buffer.as_mut_slice()[..data.len()].copy_from_slice(data);
-        
+
         // Read data
         assert_eq!(&buffer.as_slice()[..data.len()], data);
     }
@@ -124,7 +124,7 @@ mod tests {
     fn test_alignment_validation() {
         // Non-power-of-2 alignment should fail
         assert!(AlignedBuffer::new(1024, 513).is_err());
-        
+
         // Power-of-2 alignments should succeed
         assert!(AlignedBuffer::new(1024, 512).is_ok());
         assert!(AlignedBuffer::new(1024, 1024).is_ok());
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_buffer_alignment() {
         let alignments = vec![512, 1024, 4096];
-        
+
         for align in alignments {
             let buffer = AlignedBuffer::new(8192, align).unwrap();
             assert_eq!(buffer.as_ptr() as usize % align, 0);

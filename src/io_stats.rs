@@ -14,6 +14,12 @@ pub struct IoStatsTracker {
     pub write_bytes: Arc<AtomicU64>,
 }
 
+impl Default for IoStatsTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IoStatsTracker {
     pub fn new() -> Self {
         Self {

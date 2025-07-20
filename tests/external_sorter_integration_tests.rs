@@ -89,16 +89,14 @@ fn test_url_sorting() {
     // Sort URLs by domain and path
     let mut sorter = ExternalSorter::new_with_dir(4, 2048, test_dir());
 
-    let urls = vec![
-        "https://example.com/page1",
+    let urls = ["https://example.com/page1",
         "https://example.com/page2",
         "https://api.example.com/v1/users",
         "https://api.example.com/v2/users",
         "http://example.com/index",
         "https://blog.example.com/post/1",
         "https://blog.example.com/post/10",
-        "https://blog.example.com/post/2",
-    ];
+        "https://blog.example.com/post/2"];
 
     let mut data = Vec::new();
     for (i, url) in urls.iter().enumerate() {

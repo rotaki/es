@@ -8,16 +8,15 @@
 //!   -k, --key-columns <COLS>     Comma-separated list of key column indices (default: 0)
 //!   -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 1)
 //!   -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)
-//!   -b, --buffer-size <KB>       Buffer size in KB for direct I/O (default: 256)
 //!   -h, --help                   Show this help message
 
 use crossbeam::channel;
-use es::{GlobalFileManager, IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
+use es::constants::DEFAULT_BUFFER_SIZE;
+use es::{IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::env;
 use std::fs::File;
 use std::process;
-use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -26,7 +25,6 @@ struct Config {
     key_columns: Vec<usize>,
     value_columns: Vec<usize>,
     thread_counts: Vec<usize>,
-    buffer_size_kb: usize,
 }
 
 impl Default for Config {
@@ -36,7 +34,6 @@ impl Default for Config {
             key_columns: vec![0],
             value_columns: vec![1],
             thread_counts: vec![1, 2, 4, 8, 16],
-            buffer_size_kb: 256,
         }
     }
 }
@@ -52,7 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let filename = &config.parquet_file;
-    let buffer_size = config.buffer_size_kb * 1024;
 
     // First, get some info about the Parquet file
     let file = File::open(filename)?;
@@ -96,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Key columns: {:?}", config.key_columns);
     println!("Value columns: {:?}", config.value_columns);
     println!("Thread counts: {:?}", config.thread_counts);
-    println!("Direct I/O buffer: {} KB", config.buffer_size_kb);
+    println!("Direct I/O buffer: {} KB", DEFAULT_BUFFER_SIZE / 1024);
     println!();
 
     // Print first few rows as preview (using first key and value columns)
@@ -118,10 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let parquet_config = ParquetDirectConfig {
             key_columns: config.key_columns.clone(),
             value_columns: config.value_columns.clone(),
-            buffer_size,
         };
 
-        let parquet_direct = ParquetInputDirect::new(filename, parquet_config, Arc::new(GlobalFileManager::new(512)))?;
+        let parquet_direct = ParquetInputDirect::new(filename, parquet_config)?;
 
         // Create I/O tracker
         let io_tracker = IoStatsTracker::new();
@@ -169,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show I/O efficiency summary
     println!("I/O Efficiency Analysis:");
-    println!("- Direct I/O buffer size: {} KB", config.buffer_size_kb);
+    println!("- Direct I/O buffer size: {} KB", DEFAULT_BUFFER_SIZE / 1024);
     println!("- Note: IO MB/s > MB/s due to Direct I/O page alignment (4KB boundaries)");
 
     Ok(())
@@ -321,15 +316,6 @@ fn parse_args() -> Result<Config, String> {
                 i += 1;
                 config.thread_counts = parse_thread_list(&args[i])?;
             }
-            "-b" | "--buffer-size" => {
-                if i + 1 >= args.len() {
-                    return Err("Missing value for buffer-size".to_string());
-                }
-                i += 1;
-                config.buffer_size_kb = args[i]
-                    .parse()
-                    .map_err(|_| format!("Invalid buffer size: {}", args[i]))?;
-            }
             _ => {
                 if args[i].starts_with('-') {
                     return Err(format!("Unknown option: {}", args[i]));
@@ -406,7 +392,7 @@ fn parse_thread_list(s: &str) -> Result<Vec<usize>, String> {
         Ok(mut t) => {
             t.sort_unstable();
             t.dedup();
-            if t.iter().any(|&x| x == 0) {
+            if t.contains(&0) {
                 Err("Thread count must be greater than 0".to_string())
             } else {
                 Ok(t)

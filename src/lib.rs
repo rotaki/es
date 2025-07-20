@@ -1,5 +1,7 @@
 // Simple External Sort Library
 
+#![allow(clippy::needless_range_loop)]
+
 // Core traits from sorter.rs
 pub trait Sorter {
     fn sort(&mut self, sort_input: Box<dyn SortInput>) -> Result<Box<dyn SortOutput>, String>;
@@ -75,13 +77,12 @@ pub struct RunInfo {
 
 // Implementations
 pub mod aligned_buffer;
+pub mod constants;
+pub mod csv_input_direct;
+pub mod global_file_manager;
+pub mod io_stats;
 pub mod aligned_reader;
 pub mod aligned_writer;
-pub mod global_file_manager;
-pub mod managed_aligned_reader;
-pub mod managed_aligned_writer;
-pub mod csv_input_direct;
-pub mod io_stats;
 pub mod merge;
 pub mod order_preserving_encoding;
 pub mod parquet_input_direct;
@@ -90,12 +91,10 @@ pub mod sort_buffer;
 pub mod sorter;
 
 // Export the main types
-// pub use aligned_reader::{AlignedChunkReader, AlignedReader};
-// pub use aligned_writer::{AlignedWriter, WriteMode};
 pub use csv_input_direct::{CsvDirectConfig, CsvInputDirect};
-pub use global_file_manager::{GlobalFileManager, file_size_fd, pread_fd, pwrite_fd};
+pub use global_file_manager::{file_size_fd, pread_fd, pwrite_fd, GlobalFileManager};
 pub use io_stats::{IoStats, IoStatsTracker};
-pub use managed_aligned_reader::{ManagedAlignedReader, ManagedAlignedChunkReader};
-pub use managed_aligned_writer::ManagedAlignedWriter;
+pub use aligned_reader::{AlignedChunkReader, AlignedReader};
+pub use aligned_writer::AlignedWriter;
 pub use parquet_input_direct::{ParquetDirectConfig, ParquetInputDirect};
 pub use sorter::{ExternalSorter, Input, Output};

@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Instant;
 
 use crate::global_file_manager::GlobalFileManager;
-use crate::managed_aligned_writer::ManagedAlignedWriter;
+use crate::aligned_writer::AlignedWriter;
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;
@@ -64,7 +64,7 @@ impl SortInput for Input {
             return vec![];
         }
 
-        let chunk_size = (self.data.len() + num_scanners - 1) / num_scanners;
+        let chunk_size = self.data.len().div_ceil(num_scanners);
         let mut scanners = Vec::new();
 
         // Clone the data for each scanner since we can't move out of &self
@@ -210,7 +210,7 @@ impl ExternalSorter {
                 path: temp_dir,
                 should_delete: true,
             }),
-            file_manager: Arc::new(GlobalFileManager::new(512)), // 512-byte alignment for Direct I/O
+            file_manager: Arc::new(GlobalFileManager::new()), // 512-byte alignment for Direct I/O
         }
     }
 }
@@ -250,13 +250,12 @@ impl Sorter for ExternalSorter {
                 let mut sort_buffer = SortBufferImpl::new(buffer_size);
 
                 let run_path = temp_dir.join(format!("intermediate_{}.dat", thread_id));
+                let fd = file_manager
+                    .get_or_open_file(&run_path)
+                    .expect("Failed to open run file");
                 let mut run_writer = Option::Some(
-                    ManagedAlignedWriter::new_with_tracker(
-                        file_manager.clone(),
-                        &run_path,
-                        Some((*io_tracker).clone()),
-                    )
-                    .expect("Failed to create run writer"),
+                    AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
+                        .expect("Failed to create run writer"),
                 );
 
                 for (key, value) in scanner {
@@ -264,10 +263,8 @@ impl Sorter for ExternalSorter {
                         // Buffer is full, sort and flush
                         sort_buffer.sort();
 
-                        let mut output_run = RunImpl::from_writer_with_manager(
-                            run_writer.take().unwrap(),
-                            file_manager.clone()
-                        ).expect("Failed to create run");
+                        let mut output_run = RunImpl::from_writer(run_writer.take().unwrap())
+                            .expect("Failed to create run");
 
                         for (k, v) in sort_buffer.drain() {
                             output_run.append(k, v);
@@ -290,10 +287,8 @@ impl Sorter for ExternalSorter {
                 if !sort_buffer.is_empty() {
                     sort_buffer.sort();
 
-                    let mut output_run = RunImpl::from_writer_with_manager(
-                        run_writer.take().unwrap(),
-                        file_manager.clone()
-                    ).expect("Failed to create run");
+                    let mut output_run = RunImpl::from_writer(run_writer.take().unwrap())
+                        .expect("Failed to create run");
 
                     for (k, v) in sort_buffer.drain() {
                         output_run.append(k, v);
@@ -443,20 +438,19 @@ impl Sorter for ExternalSorter {
 
                 // Create output run for this thread
                 let run_path = temp_dir.join(format!("merge_output_{}.dat", thread_id));
-                let writer = ManagedAlignedWriter::new_with_tracker(
-                    file_manager.clone(),
-                    &run_path,
-                    Some((*io_tracker).clone()),
-                )
-                .expect("Failed to create merge output writer");
+                let fd = file_manager
+                    .get_or_open_file(&run_path)
+                    .expect("Failed to open run file");
+                let writer =
+                    AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
+                        .expect("Failed to create run writer");
                 let mut output_run =
-                    RunImpl::from_writer_with_manager(writer, file_manager)
-                        .expect("Failed to create merge output run");
+                    RunImpl::from_writer(writer).expect("Failed to create merge output run");
 
                 // Merge this range directly into the output run
-                let mut merge_iter = MergeIterator::new(iterators);
+                let merge_iter = MergeIterator::new(iterators);
 
-                while let Some((key, value)) = merge_iter.next() {
+                for (key, value) in merge_iter {
                     output_run.append(key, value);
                 }
 

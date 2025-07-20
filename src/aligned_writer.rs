@@ -1,216 +1,142 @@
-//! AlignedWriter - handles O_DIRECT writes with proper alignment
-//!
-//! This module provides utilities for writing files with O_DIRECT flag
-//! while handling the alignment requirements.
+use std::io::{self, Write};
+use std::os::unix::io::RawFd;
 
-use crate::IoStatsTracker;
-use std::fs::{File, OpenOptions};
-use std::io::{Error as IoError, ErrorKind, Result as IoResult, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use crate::aligned_buffer::AlignedBuffer;
+use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
+use crate::global_file_manager::pwrite_fd;
+use crate::io_stats::IoStatsTracker;
 
-pub const PAGE_SIZE: usize = 4096; // Page size for O_DIRECT alignment
-
-/// Write mode for AlignedWriter
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteMode {
-    /// Create new file, truncate if exists
-    Create,
-    /// Append to existing file, create if doesn't exist
-    Append,
-    /// Create new file, fail if exists
-    CreateNew,
-}
-
-fn allocate_aligned_buffer(size: usize) -> Vec<u8> {
-    // Round up to page size
-    let aligned_size = ((size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
-    vec![0u8; aligned_size]
-}
-
-/// AlignedWriter handles O_DIRECT writes with alignment requirements
+/// AlignedWriter that uses GlobalFileManager for file operations
 pub struct AlignedWriter {
-    path: PathBuf,
-    file: File,
-    buffer: Vec<u8>,
-    buffer_pos: usize, // Current position in buffer
+    /// Raw file descriptor for direct operations
+    fd: RawFd,
+    /// Aligned buffer for writing
+    buffer: AlignedBuffer,
+    /// Current position in the file (aligned)
+    file_offset: u64,
+    /// Current position in the buffer
+    buffer_pos: usize,
+    /// Logical position in the file (unaligned)
+    logical_pos: u64,
+    /// I/O statistics tracker
     io_tracker: Option<IoStatsTracker>,
 }
 
 impl AlignedWriter {
-    /// Open a file for writing with O_DIRECT with default buffer size (64KB)
-    pub fn open(path: &Path, mode: WriteMode) -> Result<Self, String> {
-        Self::open_with_buffer_size(path, mode, 64 * 1024)
-    }
-
-    /// Open a file for writing with O_DIRECT with specified buffer size
-    pub fn open_with_buffer_size(
-        path: &Path,
-        mode: WriteMode,
-        buffer_size: usize,
-    ) -> Result<Self, String> {
-        Self::open_with_tracker_and_buffer_size(path, mode, None, buffer_size)
-    }
-
-    /// Open a file for writing with O_DIRECT and optional I/O tracking (default buffer size)
-    pub fn open_with_tracker(
-        path: &Path,
-        mode: WriteMode,
-        tracker: Option<IoStatsTracker>,
-    ) -> Result<Self, String> {
-        Self::open_with_tracker_and_buffer_size(path, mode, tracker, 64 * 1024)
-    }
-
-    /// Open a file for writing with O_DIRECT, optional I/O tracking, and specified buffer size
-    pub fn open_with_tracker_and_buffer_size(
-        path: &Path,
-        mode: WriteMode,
-        tracker: Option<IoStatsTracker>,
-        buffer_size: usize,
-    ) -> Result<Self, String> {
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-        }
-
-        // Configure OpenOptions based on mode
-        let mut options = OpenOptions::new();
-        // options.custom_flags(libc::O_DIRECT);
-
-        match mode {
-            WriteMode::Create => {
-                options.create(true).write(true).truncate(true);
-            }
-            WriteMode::Append => {
-                options.create(true).append(true);
-            }
-            WriteMode::CreateNew => {
-                options.create_new(true).write(true);
-            }
-        }
-
-        // Open file with O_DIRECT
-        let file = options.open(path).map_err(|e| match mode {
-            WriteMode::CreateNew if e.kind() == ErrorKind::AlreadyExists => {
-                format!("File already exists: {:?}", path)
-            }
-            _ => format!("Failed to open file with O_DIRECT: {}", e),
-        })?;
-
-        // Allocate aligned buffer with specified size
-        let buffer = allocate_aligned_buffer(buffer_size);
-
-        Ok(AlignedWriter {
-            path: path.to_path_buf(),
-            file,
-            buffer,
+    pub fn from_raw_fd(fd: RawFd) -> io::Result<Self> {
+        Ok(Self {
+            fd,
+            buffer: AlignedBuffer::new(DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT)?,
+            file_offset: 0,
             buffer_pos: 0,
+            logical_pos: 0,
+            io_tracker: None,
+        })
+    }
+
+    /// Create a new ManagedAlignedWriter with specified buffer size and I/O tracker
+    pub fn from_raw_fd_with_tracker(
+        fd: RawFd,
+        tracker: Option<IoStatsTracker>,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            fd,
+            buffer: AlignedBuffer::new(DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT)?,
+            file_offset: 0,
+            buffer_pos: 0,
+            logical_pos: 0,
             io_tracker: tracker,
         })
     }
 
-    /// Legacy method for backward compatibility - opens for append
-    #[deprecated(since = "0.2.0", note = "Use open(path, WriteMode::Append) instead")]
-    pub fn open_and_append(path: &Path) -> Result<Self, String> {
-        Self::open(path, WriteMode::Append)
+    pub fn get_fd(&self) -> RawFd {
+        self.fd
     }
 
-    /// Legacy method for backward compatibility - creates new file
-    #[deprecated(since = "0.2.0", note = "Use open(path, WriteMode::Create) instead")]
-    pub fn create(path: &Path) -> Result<Self, String> {
-        Self::open(path, WriteMode::Create)
-    }
-
-    /// Get the path of the file being written
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Get the current position in the file (including buffered data)
-    pub fn current_pos(&mut self) -> Result<u64, String> {
-        let file_pos = self
-            .file
-            .seek(SeekFrom::Current(0))
-            .map_err(|e| format!("Failed to get file position: {}", e))?;
-        Ok(file_pos + self.buffer_pos as u64)
-    }
-
-    /// Write all data, buffering as needed
-    pub fn write_all(&mut self, mut data: &[u8]) -> Result<(), String> {
-        while !data.is_empty() {
-            let available = self.buffer.len() - self.buffer_pos;
-            let to_write = data.len().min(available);
-
-            // Copy data to buffer
-            self.buffer[self.buffer_pos..self.buffer_pos + to_write]
-                .copy_from_slice(&data[..to_write]);
-            self.buffer_pos += to_write;
-            data = &data[to_write..];
-
-            // If buffer is full, flush it
-            if self.buffer_pos == self.buffer.len() {
-                self.flush_buffer()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Flush any buffered data to disk
-    pub fn flush(&mut self) -> Result<(), String> {
-        if self.buffer_pos > 0 {
-            // For O_DIRECT, we need to write aligned data
-            // Round up to page boundary and pad with zeros
-            let aligned_len = ((self.buffer_pos + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
-
-            // Pad with zeros
-            while self.buffer_pos < aligned_len {
-                self.buffer[self.buffer_pos] = 0;
-                self.buffer_pos += 1;
-            }
-
-            self.flush_buffer()?;
-        }
-        Ok(())
-    }
-
-    /// Internal method to flush the buffer
-    fn flush_buffer(&mut self) -> Result<(), String> {
+    /// Flush the internal buffer to the file
+    fn flush_buffer(&mut self) -> io::Result<()> {
         if self.buffer_pos == 0 {
             return Ok(());
         }
 
-        // Track I/O operation
+        // For Direct I/O, we need to write aligned chunks
+        let write_len = align_up(self.buffer_pos, DIRECT_IO_ALIGNMENT);
+
+        // Zero out the padding bytes
+        for i in self.buffer_pos..write_len {
+            self.buffer.as_mut_slice()[i] = 0;
+        }
+
+        // Write the aligned buffer using the raw file descriptor
+        let written = pwrite_fd(
+            self.fd,
+            &self.buffer.as_slice()[..write_len],
+            self.file_offset,
+        )?;
+
+        if written != write_len {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Failed to write all bytes",
+            ));
+        }
+
+        // Update I/O statistics if tracker is present
         if let Some(ref tracker) = self.io_tracker {
             tracker.add_write(1, self.buffer_pos as u64);
         }
 
-        // Write only the filled portion of the buffer
-        self.file
-            .write_all(&self.buffer[..self.buffer_pos])
-            .map_err(|e| format!("Failed to write to file: {}", e))?;
-
+        self.logical_pos += self.buffer_pos as u64;
+        self.file_offset += write_len as u64;
         self.buffer_pos = 0;
+
         Ok(())
+    }
+
+    /// Get the current position in the file
+    pub fn position(&self) -> u64 {
+        self.logical_pos + self.buffer_pos as u64
+    }
+
+    /// Sync all data to disk
+    pub fn sync(&mut self) -> io::Result<()> {
+        self.flush()
     }
 }
 
 impl Write for AlignedWriter {
-    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        let len = buf.len();
-        self.write_all(buf)
-            .map_err(|e| IoError::new(ErrorKind::Other, e))?;
-        Ok(len)
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut total_written = 0;
+
+        while total_written < buf.len() {
+            let available = DEFAULT_BUFFER_SIZE - self.buffer_pos;
+            let to_copy = std::cmp::min(buf.len() - total_written, available);
+
+            // Copy data to buffer
+            self.buffer.as_mut_slice()[self.buffer_pos..self.buffer_pos + to_copy]
+                .copy_from_slice(&buf[total_written..total_written + to_copy]);
+
+            self.buffer_pos += to_copy;
+            total_written += to_copy;
+
+            // Flush if buffer is full
+            if self.buffer_pos == DEFAULT_BUFFER_SIZE {
+                self.flush_buffer()?;
+            }
+        }
+
+        Ok(total_written)
     }
 
-    fn flush(&mut self) -> IoResult<()> {
-        self.flush().map_err(|e| IoError::new(ErrorKind::Other, e))
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()
     }
 }
 
 impl Drop for AlignedWriter {
     fn drop(&mut self) {
         // Best effort flush on drop
-        let _ = self.flush();
+        let _ = self.flush_buffer();
     }
 }
 
@@ -218,239 +144,209 @@ impl Drop for AlignedWriter {
 mod tests {
     use super::*;
     use crate::aligned_reader::AlignedReader;
-    use std::fs;
+    use libc::O_DIRECT;
+    use std::fs::{self, OpenOptions};
     use std::io::Read;
-    use tempfile::NamedTempFile;
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::Path;
+    use tempfile::tempdir;
 
-    #[test]
-    fn test_basic_write() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        // Write data
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(b"Hello, Direct I/O!").unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Read back
-        let content = fs::read(path).unwrap();
-        assert!(content.starts_with(b"Hello, Direct I/O!"));
+    fn create_test_file(dir: &Path, name: &str) -> io::Result<RawFd> {
+        let file_path = dir.join(name);
+        let file = fs::File::create(&file_path)?;
+        drop(file);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)?;
+        Ok(file.into_raw_fd())
     }
 
     #[test]
-    fn test_append_mode() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
+    fn test_basic_write() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "test.dat").unwrap();
+        let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+        let data = b"Hello, World!";
+        writer.write_all(data).unwrap();
+        writer.flush().unwrap();
 
-        // Write initial data
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(b"First ").unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Append more data
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Append).unwrap();
-            writer.write_all(b"Second").unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Read back
-        let content = fs::read(path).unwrap();
-        assert!(content.starts_with(b"First "));
-        // Note: Due to padding, we need to find "Second" after some padding
-        let content_str = String::from_utf8_lossy(&content);
-        assert!(content_str.contains("Second"));
+        // Read back using regular reader to verify
+        let content = fs::read(dir.path().join("test.dat")).unwrap();
+        assert!(content.starts_with(b"Hello, World!"));
     }
 
     #[test]
     fn test_large_write() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "large_test.dat").unwrap();
 
-        // Create large data that spans multiple buffers
-        let large_data = vec![b'X'; 256 * 1024]; // 256KB
+        // Generate test data larger than buffer
+        let test_data: Vec<u8> = (0..200_000).map(|i| (i % 256) as u8).collect();
 
         {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(&large_data).unwrap();
+            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            writer.write_all(&test_data).unwrap();
             writer.flush().unwrap();
         }
 
-        // Verify file size is at least as large as the data
-        let metadata = fs::metadata(path).unwrap();
-        assert!(metadata.len() >= large_data.len() as u64);
+        // Verify using ManagedAlignedReader
+        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+        let mut read_data = vec![0u8; test_data.len()];
+        reader.read_exact(&mut read_data).unwrap();
+
+        assert_eq!(&read_data[..test_data.len()], &test_data[..]);
     }
 
     #[test]
-    fn test_multiple_small_writes() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
+    fn test_multiple_writers_different_files() {
+        let dir = tempdir().unwrap();
+        let fd1 = create_test_file(dir.path(), "file1.dat").unwrap();
+        let fd2 = create_test_file(dir.path(), "file2.dat").unwrap();
+
+        let mut writer1 = AlignedWriter::from_raw_fd(fd1).unwrap();
+        let mut writer2 = AlignedWriter::from_raw_fd(fd2).unwrap();
+
+        writer1.write_all(b"File 1 content").unwrap();
+        writer2.write_all(b"File 2 content").unwrap();
+
+        writer1.flush().unwrap();
+        writer2.flush().unwrap();
+
+        let content1 = fs::read(dir.path().join("file1.dat")).unwrap();
+        let content2 = fs::read(dir.path().join("file2.dat")).unwrap();
+
+        assert!(content1.starts_with(b"File 1 content"));
+        assert!(content2.starts_with(b"File 2 content"));
+    }
+
+    #[test]
+    fn test_position_tracking() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "position_test.dat").unwrap();
+
+        let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+
+        assert_eq!(writer.position(), 0);
+
+        writer.write_all(b"12345").unwrap();
+        assert_eq!(writer.position(), 5);
+
+        writer.write_all(b"67890").unwrap();
+        assert_eq!(writer.position(), 10);
+
+        writer.flush().unwrap();
+        assert_eq!(writer.position(), 10);
+    }
+
+    #[test]
+    fn test_write_patterns() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "test.dat").unwrap();
 
         {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(b"One ").unwrap();
-            writer.write_all(b"Two ").unwrap();
-            writer.write_all(b"Three").unwrap();
+            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+
+            // Write pattern: small, large, small
+            writer.write_all(b"small").unwrap();
+
+            let large = vec![b'X'; 100_000];
+            writer.write_all(&large).unwrap();
+
+            writer.write_all(b"end").unwrap();
             writer.flush().unwrap();
         }
 
-        // Read back
-        let content = fs::read(path).unwrap();
-        assert!(content.starts_with(b"One Two Three"));
+        // Verify pattern
+        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+        let mut buf = vec![0u8; 5];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"small");
+
+        let mut buf = vec![0u8; 100_000];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, vec![b'X'; 100_000]);
+
+        let mut buf = vec![0u8; 3];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"end");
     }
 
     #[test]
-    fn test_io_stats_tracking() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let tracker = IoStatsTracker::new();
+    fn test_auto_flush_on_drop() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "auto_flush_test.dat").unwrap();
 
         {
-            let mut writer =
-                AlignedWriter::open_with_tracker(path, WriteMode::Create, Some(tracker.clone()))
-                    .unwrap();
-            // Write enough to trigger a buffer flush
-            let data = vec![b'A'; 70 * 1024]; // 70KB
+            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            writer.write_all(b"Auto flush test").unwrap();
+            // No explicit flush - should flush on drop
+        }
+
+        // Verify data was written
+        let content = fs::read(dir.path().join("auto_flush_test.dat")).unwrap();
+        assert!(content.starts_with(b"Auto flush test"));
+    }
+
+    #[test]
+    fn test_concurrent_write_read() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "test.dat").unwrap();
+
+        // First write some initial data
+        {
+            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            let data: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
             writer.write_all(&data).unwrap();
             writer.flush().unwrap();
         }
 
+        // Now create a reader and writer using same file manager
+        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+
+        // Read first part
+        let mut buf = vec![0u8; 1000];
+        reader.read_exact(&mut buf).unwrap();
+
+        // Verify we read the correct data
+        let expected: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn test_io_tracker() {
+        let dir = tempdir().unwrap();
+        let fd = create_test_file(dir.path(), "test.dat").unwrap();
+
+        let tracker = crate::io_stats::IoStatsTracker::new();
+
+        let mut writer =
+            AlignedWriter::from_raw_fd_with_tracker(fd, Some(tracker.clone())).unwrap();
+
+        // Write some data
+        let data = vec![b'X'; 10_000];
+        writer.write_all(&data).unwrap();
+
+        // Check that nothing is tracked yet (not flushed)
         let (ops, bytes) = tracker.get_write_stats();
-        assert!(ops >= 2); // At least 2 I/O operations (one for full buffer, one for flush)
-        assert!(bytes >= 70 * 1024); // At least 70KB written
+        assert_eq!(ops, 0);
+        assert_eq!(bytes, 0);
 
-        // Check detailed stats
-        let detailed = tracker.get_detailed_stats();
-        assert_eq!(detailed.write_ops, ops);
-        assert_eq!(detailed.write_bytes, bytes);
-        assert_eq!(detailed.read_ops, 0);
-        assert_eq!(detailed.read_bytes, 0);
-    }
+        // Flush and check stats
+        writer.flush().unwrap();
+        let (ops, bytes) = tracker.get_write_stats();
+        assert!(ops > 0);
+        assert_eq!(bytes as usize, 10_000);
 
-    #[test]
-    fn test_aligned_writer_reader_compatibility() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
+        // Write more data
+        writer.write_all(&data).unwrap();
+        writer.flush().unwrap();
 
-        let test_data = b"This is a test of AlignedWriter and AlignedReader compatibility!";
-
-        // Write with AlignedWriter
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(test_data).unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Read with AlignedReader
-        {
-            let mut reader = AlignedReader::new(path, 4096).unwrap();
-            let mut buffer = vec![0u8; test_data.len()];
-            reader.read_exact(&mut buffer).unwrap();
-            assert_eq!(&buffer, test_data);
-        }
-    }
-
-    #[test]
-    fn test_current_pos() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-
-        assert_eq!(writer.current_pos().unwrap(), 0);
-
-        writer.write_all(b"Hello").unwrap();
-        assert_eq!(writer.current_pos().unwrap(), 5);
-
-        writer.write_all(b" World").unwrap();
-        assert_eq!(writer.current_pos().unwrap(), 11);
-    }
-
-    #[test]
-    fn test_empty_write() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            writer.write_all(b"").unwrap();
-            writer.flush().unwrap();
-        }
-
-        // File should exist but may be empty
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn test_write_trait() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        {
-            let mut writer = AlignedWriter::open(path, WriteMode::Create).unwrap();
-            // Use Write trait methods
-            write!(writer, "Hello {}", "World").unwrap();
-            writer.flush().unwrap();
-        }
-
-        let content = fs::read(path).unwrap();
-        assert!(content.starts_with(b"Hello World"));
-    }
-
-    #[test]
-    fn test_create_new_mode() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("test_file.dat");
-
-        // First create should succeed
-        {
-            let mut writer = AlignedWriter::open(&path, WriteMode::CreateNew).unwrap();
-            writer.write_all(b"First").unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Second create should fail
-        let result = AlignedWriter::open(&path, WriteMode::CreateNew);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.contains("already exists"));
-        }
-    }
-
-    #[test]
-    fn test_custom_buffer_size() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        // Test with small buffer (8KB)
-        {
-            let mut writer =
-                AlignedWriter::open_with_buffer_size(path, WriteMode::Create, 8 * 1024).unwrap();
-            // Write more than 8KB to force flush
-            let data = vec![b'A'; 10 * 1024];
-            writer.write_all(&data).unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Verify file size
-        let metadata = fs::metadata(path).unwrap();
-        assert!(metadata.len() >= 10 * 1024);
-
-        // Test with large buffer (128KB)
-        {
-            let mut writer =
-                AlignedWriter::open_with_buffer_size(path, WriteMode::Create, 128 * 1024).unwrap();
-            let data = vec![b'B'; 50 * 1024];
-            writer.write_all(&data).unwrap();
-            writer.flush().unwrap();
-        }
-
-        // Verify new content
-        let metadata = fs::metadata(path).unwrap();
-        assert!(metadata.len() >= 50 * 1024);
+        // Check updated stats
+        let (ops2, bytes2) = tracker.get_write_stats();
+        assert!(ops2 > ops);
+        assert_eq!(bytes2 as usize, 20_000);
     }
 }

@@ -4,15 +4,16 @@
 //! and to bypass the OS page cache.
 
 use crate::{
-    managed_aligned_reader::ManagedAlignedChunkReader, order_preserving_encoding::*, IoStatsTracker, SortInput,
+    aligned_reader::AlignedChunkReader, order_preserving_encoding::*,
+    IoStatsTracker, SortInput,
 };
-use crate::global_file_manager::GlobalFileManager;
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::fs::OpenOptions;
+use std::os::fd::{AsRawFd, RawFd};
+use std::path::Path;
 
 /// Configuration for Parquet Direct I/O reading
 #[derive(Clone)]
@@ -21,8 +22,6 @@ pub struct ParquetDirectConfig {
     pub key_columns: Vec<usize>,
     /// Column indices to use as value (will be concatenated)  
     pub value_columns: Vec<usize>,
-    /// Buffer size for Direct I/O (default: 256KB)
-    pub buffer_size: usize,
 }
 
 impl Default for ParquetDirectConfig {
@@ -30,27 +29,21 @@ impl Default for ParquetDirectConfig {
         Self {
             key_columns: vec![0],
             value_columns: vec![1],
-            buffer_size: 256 * 1024, // 256KB default
         }
     }
 }
 
 /// ParquetInputDirect reads key-value pairs from a Parquet file using Direct I/O
 pub struct ParquetInputDirect {
-    path: Arc<PathBuf>,
+    fd: RawFd,
     config: ParquetDirectConfig,
     num_rows: usize,
     num_row_groups: usize,
-    file_manager: Arc<GlobalFileManager>,
 }
 
 impl ParquetInputDirect {
     /// Create a new ParquetInputDirect from a Parquet file with GlobalFileManager
-    pub fn new(
-        path: impl AsRef<Path>, 
-        config: ParquetDirectConfig,
-        file_manager: Arc<GlobalFileManager>
-    ) -> Result<Self, String> {
+    pub fn new(path: impl AsRef<Path>, config: ParquetDirectConfig) -> Result<Self, String> {
         let path = path.as_ref().to_path_buf();
 
         if !path.exists() {
@@ -65,8 +58,17 @@ impl ParquetInputDirect {
             return Err("At least one value column must be specified".to_string());
         }
 
+        // Open file with read.
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .map_err(|e| format!("Failed to open Parquet file: {}", e))?;
+
+        let fd = file.as_raw_fd();
+        std::mem::forget(file); // Prevent file from closing
+
         // Use ManagedAlignedChunkReader to read metadata
-        let chunk_reader = ManagedAlignedChunkReader::new(file_manager.clone(), &path, config.buffer_size)?;
+        let chunk_reader = AlignedChunkReader::new(fd)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(chunk_reader)
             .map_err(|e| format!("Failed to create reader builder: {}", e))?;
 
@@ -98,17 +100,16 @@ impl ParquetInputDirect {
         }
 
         Ok(Self {
-            path: Arc::new(path),
+            fd,
             config,
             num_rows,
             num_row_groups,
-            file_manager,
         })
     }
 
     /// Create with default configuration
-    pub fn new_default(path: impl AsRef<Path>, file_manager: Arc<GlobalFileManager>) -> Result<Self, String> {
-        Self::new(path, ParquetDirectConfig::default(), file_manager)
+    pub fn new_default(path: impl AsRef<Path>) -> Result<Self, String> {
+        Self::new(path, ParquetDirectConfig::default())
     }
 
     /// Get the number of rows
@@ -134,7 +135,7 @@ impl SortInput for ParquetInputDirect {
 
         // Simple partitioning: divide row groups among scanners
         let mut scanners = Vec::new();
-        let groups_per_scanner = (self.num_row_groups + num_scanners - 1) / num_scanners;
+        let groups_per_scanner = self.num_row_groups.div_ceil(num_scanners);
 
         for i in 0..num_scanners {
             let start_group = i * groups_per_scanner;
@@ -145,7 +146,7 @@ impl SortInput for ParquetInputDirect {
             }
 
             let scanner = ParquetPartitionDirect {
-                path: Arc::clone(&self.path),
+                fd: self.fd,
                 config: self.config.clone(),
                 start_row_group: start_group,
                 end_row_group: end_group,
@@ -153,7 +154,6 @@ impl SortInput for ParquetInputDirect {
                 current_row: 0,
                 reader: None,
                 io_stats: io_tracker.clone(),
-                file_manager: self.file_manager.clone(),
             };
 
             scanners.push(Box::new(scanner) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
@@ -165,7 +165,7 @@ impl SortInput for ParquetInputDirect {
 
 /// Iterator over a partition of row groups using Direct I/O
 struct ParquetPartitionDirect {
-    path: Arc<PathBuf>,
+    fd: RawFd,
     config: ParquetDirectConfig,
     start_row_group: usize,
     end_row_group: usize,
@@ -173,19 +173,13 @@ struct ParquetPartitionDirect {
     current_row: usize,
     reader: Option<Box<dyn arrow::record_batch::RecordBatchReader + Send>>,
     io_stats: Option<IoStatsTracker>,
-    file_manager: Arc<GlobalFileManager>,
 }
 
 impl ParquetPartitionDirect {
     fn init_reader(&mut self) -> Option<()> {
         // Need to get file_manager - add it to ParquetPartitionDirect struct
-        let chunk_reader = ManagedAlignedChunkReader::new_with_tracker(
-            self.file_manager.clone(),
-            self.path.as_ref(),
-            self.config.buffer_size,
-            self.io_stats.clone(),
-        )
-        .ok()?;
+        let chunk_reader =
+            AlignedChunkReader::new_with_tracker(self.fd, self.io_stats.clone()).ok()?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(chunk_reader).ok()?;
 
@@ -454,15 +448,12 @@ mod tests {
         create_large_parquet(&path, num_records, records_per_row_group).unwrap();
 
         // Read with ParquetInputDirect
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), num_records);
@@ -471,7 +462,7 @@ mod tests {
         for num_partitions in [1, 2, 4, 8, 16] {
             let partitions = input.create_parallel_scanners(num_partitions, None);
             assert!(partitions.len() <= num_partitions);
-            assert!(partitions.len() > 0);
+            assert!(!partitions.is_empty());
 
             // Collect all entries
             let mut all_entries = Vec::new();
@@ -507,15 +498,12 @@ mod tests {
         create_large_parquet(&path, num_records, 500).unwrap();
 
         // Sort using external sorter
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         let mut sorter = ExternalSorter::new(4, 1024 * 1024); // 4 threads, 1MB buffer
@@ -548,15 +536,12 @@ mod tests {
         create_mixed_types_parquet(&path).unwrap();
 
         // Read with ParquetInputDirect - it should use first two columns
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 5);
@@ -594,15 +579,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read with ParquetInputDirect
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 0);
@@ -633,15 +615,12 @@ mod tests {
         writer.close().unwrap();
 
         // Should fail to create ParquetInputDirect
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let result = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         );
         assert!(result.is_err());
         if let Err(e) = result {
@@ -694,15 +673,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read compressed file
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 100);
@@ -723,15 +699,12 @@ mod tests {
         // Create file with multiple row groups
         create_large_parquet(&path, 1000, 100).unwrap();
 
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
 
@@ -747,7 +720,7 @@ mod tests {
                     let mut count = 0;
                     let mut keys = Vec::new();
 
-                    while let Some((key, _value)) = partition.next() {
+                    for (key, _value) in partition.by_ref() {
                         keys.push(String::from_utf8_lossy(&key).to_string());
                         count += 1;
                     }
@@ -824,15 +797,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read binary data
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 50);
@@ -880,15 +850,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read integer data
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 100);
@@ -898,7 +865,7 @@ mod tests {
 
         // Verify integer keys are encoded as order-preserving bytes
         for i in 0..100 {
-            let expected_key = i32_to_order_preserving_bytes(i as i32).to_vec();
+            let expected_key = i32_to_order_preserving_bytes(i).to_vec();
             let found = entries.iter().any(|(k, _)| k == &expected_key);
             assert!(found, "Missing key for id {}", i);
         }
@@ -936,15 +903,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read Date32 data
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 50);
@@ -963,15 +927,12 @@ mod tests {
         }
 
         // Now we CAN sort by date with the new encoding!
-        let file_manager2 = Arc::new(GlobalFileManager::new(512));
         let input2 = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],   // Use date as key
                 value_columns: vec![1], // Use value string as value
-                buffer_size: 256 * 1024,
             },
-            file_manager2
         )
         .unwrap();
         let mut sorter = ExternalSorter::new(2, 1024);
@@ -1045,15 +1006,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read Decimal128 data
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![1],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         assert_eq!(input.len(), 50);
@@ -1071,15 +1029,12 @@ mod tests {
         }
 
         // Now we CAN sort by decimal price with the new encoding!
-        let file_manager2 = Arc::new(GlobalFileManager::new(512));
         let input2 = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],   // Use price as key
                 value_columns: vec![1], // Use product name as value
-                buffer_size: 256 * 1024,
             },
-            file_manager2
         )
         .unwrap();
         let mut sorter = ExternalSorter::new(2, 1024);
@@ -1153,15 +1108,12 @@ mod tests {
         writer.close().unwrap();
 
         // Test 1: Sort by Date32 (column 1)
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![1],
                 value_columns: vec![0, 2, 3],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
 
@@ -1179,20 +1131,17 @@ mod tests {
             dates,
             vec![19000, 19000, 19001, 19001, 19002]
                 .into_iter()
-                .map(|d| unix_epoch_to_ce_days(d))
+                .map(unix_epoch_to_ce_days)
                 .collect::<Vec<_>>()
         );
 
         // Test 2: Sort by Decimal128 (column 2)
-        let file_manager2 = Arc::new(GlobalFileManager::new(512));
         let input2 = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![2],
                 value_columns: vec![0, 1, 3],
-                buffer_size: 256 * 1024,
             },
-            file_manager2
         )
         .unwrap();
 
@@ -1206,15 +1155,12 @@ mod tests {
         assert_eq!(sorted_by_amount.len(), 5);
 
         // Test 3: Multi-column key (Date32 + Decimal128)
-        let file_manager3 = Arc::new(GlobalFileManager::new(512));
         let input3 = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![1, 2],
                 value_columns: vec![0, 3],
-                buffer_size: 256 * 1024,
             },
-            file_manager3
         )
         .unwrap();
 
@@ -1353,15 +1299,12 @@ mod tests {
         writer.close().unwrap();
 
         // Test 1: Sort by i32 column
-        let file_manager = Arc::new(GlobalFileManager::new(512));
         let input = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![0],
                 value_columns: vec![3],
-                buffer_size: 256 * 1024,
             },
-            file_manager
         )
         .unwrap();
         let mut sorter = ExternalSorter::new(1, 1024);
@@ -1375,15 +1318,12 @@ mod tests {
         assert_eq!(i32_sorted, vec![-50, -25, 0, 75, 100]);
 
         // Test 2: Sort by f64 column
-        let file_manager2 = Arc::new(GlobalFileManager::new(512));
         let input2 = ParquetInputDirect::new(
             &path,
             ParquetDirectConfig {
                 key_columns: vec![2],
                 value_columns: vec![3],
-                buffer_size: 256 * 1024,
             },
-            file_manager2
         )
         .unwrap();
         let mut sorter2 = ExternalSorter::new(1, 1024);
