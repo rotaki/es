@@ -371,6 +371,8 @@ mod tests {
         assert_eq!(result2, 0); // Second block is empty
     }
 
+    // Only for Linux
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_alignment_validation() {
         let (manager, temp_dir) = create_test_manager();

@@ -67,7 +67,7 @@ pub fn open_file_with_direct_io(path: &Path) -> std::io::Result<File> {
     // If mac OS, do not use direct I/O
     #[cfg(target_os = "macos")]
     {
-        use std::fs::OpenOptions;
+        use std::{fs::OpenOptions, os::fd::AsRawFd};
 
         use libc::fcntl;
 
@@ -78,9 +78,9 @@ pub fn open_file_with_direct_io(path: &Path) -> std::io::Result<File> {
             .open(path)?;
 
         let fd = file.as_raw_fd();
-        let ret = unsafe { fcntl(fd, F_NOCACHE, 1) };
+        let ret = unsafe { fcntl(fd, libc::F_NOCACHE, 1) };
         if ret == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(std::io::Error::last_os_error());
         }
 
         Ok(file)
