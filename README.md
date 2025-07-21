@@ -27,7 +27,6 @@ cargo run --release --example lineitem_benchmark_cli -- [OPTIONS] <FILE>
 - `-t, --threads <LIST>` - Comma-separated thread counts to test (default: 1,2,4,8,16,32)
 - `-m, --memory <LIST>` - Comma-separated memory sizes (e.g., 1GB,2GB,4GB or 1024,2048,4096)
   - Default: 1GB,2GB,4GB,8GB,16GB,32GB
-- `-b, --buffer-size <KB>` - Direct I/O buffer size in KB (default: 64)
 - `-d, --delimiter <CHAR>` - CSV delimiter character (default: ,) - ignored for Parquet files
 - `--headers` - CSV file has headers - ignored for Parquet files
 - `--help` - Show help message
