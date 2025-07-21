@@ -37,9 +37,6 @@ echo "==========================================================================
 echo "TEST 1: SF10 - 10GB Lineitem File" | tee -a "$LOG_FILE_SF10"
 echo "==================================================================================" | tee -a "$LOG_FILE_SF10"
 if [ -f "lineitem_sf10.csv" ]; then
-    echo "Testing with memory sizes: 512MB, 1GB, 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF10"
-    echo "" | tee -a "$LOG_FILE_SF10"
-    
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
         -m "512MB,1GB,2GB,4GB,8GB" \
@@ -64,9 +61,6 @@ echo "==========================================================================
 echo "TEST 2: SF100 - 100GB Lineitem File" | tee -a "$LOG_FILE_SF100"
 echo "==================================================================================" | tee -a "$LOG_FILE_SF100"
 if [ -f "lineitem_sf100.csv" ]; then
-    echo "Testing with memory sizes: 5GB, 10GB, 20GB, 40GB, 80GB" | tee -a "$LOG_FILE_SF100"
-    echo "" | tee -a "$LOG_FILE_SF100"
-    
     cargo run --release --example lineitem_benchmark_cli -- \
         -t $THREADS \
         -m "5GB,10GB,20GB,40GB,80GB" \
@@ -91,9 +85,6 @@ echo -e "\n" | tee -a "$SUMMARY_FILE"
 # echo "TEST 3: SF1000 - 1TB Lineitem File" | tee -a "$LOG_FILE_SF1000"
 # echo "==================================================================================" | tee -a "$LOG_FILE_SF1000"
 # if [ -f "lineitem_sf1000.csv" ]; then
-#     echo "Testing with memory sizes: 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF1000"
-#     echo "" | tee -a "$LOG_FILE_SF1000"
-#     
 #     cargo run --release --example lineitem_benchmark_cli -- \
 #         -t $THREADS \
 #         -m "2GB,4GB,8GB" \
@@ -118,9 +109,6 @@ echo -e "\n" | tee -a "$SUMMARY_FILE"
 # echo "TEST 4: SF10000 - 10TB Lineitem File" | tee -a "$LOG_FILE_SF10000"
 # echo "==================================================================================" | tee -a "$LOG_FILE_SF10000"
 # if [ -f "lineitem_sf10000.csv" ]; then
-#     echo "Testing with memory sizes: 1GB, 2GB, 4GB, 8GB" | tee -a "$LOG_FILE_SF10000"
-#     echo "" | tee -a "$LOG_FILE_SF10000"
-#     
 #     cargo run --release --example lineitem_benchmark_cli -- \
 #         -t $THREADS \
 #         -m "1GB,2GB,4GB,8GB" \
