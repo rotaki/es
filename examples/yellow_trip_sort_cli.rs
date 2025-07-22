@@ -1,14 +1,14 @@
-//! Unified benchmark for sorting TPC-H lineitem table in CSV or Parquet format with CLI arguments using Direct I/O
+//! Unified benchmark for sorting NYC Yellow Taxi trip data in CSV or Parquet format with CLI arguments using Direct I/O
 //!
-//! Usage: lineitem_benchmark_cli [OPTIONS] <FILE>
+//! Usage: yellow_trip_sort_cli [OPTIONS] <FILE>
 //!
 //! Options:
-//!   -k, --key-columns <COLS>     Comma-separated list of key column indices (default: 0,3)
-//!   -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 10,5)
+//!   -k, --key-columns <COLS>     Comma-separated list of key column indices (default: 1,2)
+//!   -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 10,11,15)
 //!   -t, --threads <LIST>         Comma-separated thread counts to test (default: 1,2,4,8,16,32)
 //!   -m, --memory <LIST>          Comma-separated memory sizes (e.g., 1GB,2GB,4GB or 1024,2048,4096)
 //!                                Default: 1GB,2GB,4GB,8GB,16GB,32GB
-//!   -d, --delimiter <CHAR>       CSV delimiter character (default: |) - ignored for Parquet files
+//!   -d, --delimiter <CHAR>       CSV delimiter character (default: ,) - ignored for Parquet files
 //!   --headers                    CSV file has headers - ignored for Parquet files
 //!   --help                       Show this help message
 
@@ -39,8 +39,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             file_path: String::new(),
-            key_columns: vec![0, 3],    // l_orderkey, l_linenumber
-            value_columns: vec![10, 5], // l_shipdate, l_extendedprice
+            key_columns: vec![1, 2], // tpep_pickup_datetime, tpep_dropoff_datetime
+            value_columns: vec![10, 11, 15], // fare_amount, extra, tolls_amount
             // thread_counts: vec![1, 2, 4, 8, 16, 32],
             thread_counts: vec![4, 8],
             // memory_sizes: vec![1024, 2048, 4096, 8192, 16384, 32768], // MB
@@ -79,24 +79,27 @@ struct BenchmarkResult {
     merge_write_bytes: u64,
 }
 
-// Column names for TPC-H lineitem table
+// Column names for NYC Yellow Taxi trip data
 const COLUMN_NAMES: &[&str] = &[
-    "l_orderkey",      // 0
-    "l_partkey",       // 1
-    "l_suppkey",       // 2
-    "l_linenumber",    // 3
-    "l_quantity",      // 4
-    "l_extendedprice", // 5
-    "l_discount",      // 6
-    "l_tax",           // 7
-    "l_returnflag",    // 8
-    "l_linestatus",    // 9
-    "l_shipdate",      // 10
-    "l_commitdate",    // 11
-    "l_receiptdate",   // 12
-    "l_shipinstruct",  // 13
-    "l_shipmode",      // 14
-    "l_comment",       // 15
+    "vendorid",              // 0
+    "tpep_pickup_datetime",  // 1
+    "tpep_dropoff_datetime", // 2
+    "passenger_count",       // 3
+    "trip_distance",         // 4
+    "ratecodeid",            // 5
+    "store_and_fwd_flag",    // 6
+    "pulocationid",          // 7
+    "dolocationid",          // 8
+    "payment_type",          // 9
+    "fare_amount",           // 10
+    "extra",                 // 11
+    "mta_tax",               // 12
+    "tip_amount",            // 13
+    "tolls_amount",          // 14
+    "improvement_surcharge", // 15
+    "total_amount",          // 16
+    "congestion_surcharge",  // 17
+    "airport_fee",           // 18
 ];
 
 fn main() {
@@ -236,48 +239,51 @@ fn bytes_to_human_readable(bytes: usize) -> String {
 }
 
 fn show_usage() -> ! {
-    println!("TPC-H Lineitem Sort Benchmark with configurable columns");
+    println!("NYC Yellow Taxi Trip Data Sort Benchmark with configurable columns");
     println!("\nUsage: {} [OPTIONS] <FILE>", env::args().next().unwrap());
     println!("\nSupported file formats: .csv, .parquet");
     println!("\nOptions:");
     println!(
-        "  -k, --key-columns <COLS>     Comma-separated list of key column indices (default: 0,3)"
+        "  -k, --key-columns <COLS>     Comma-separated list of key column indices (default: 1,2)"
     );
-    println!("  -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 10,5)");
+    println!("  -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 10,11,15)");
     println!("  -t, --threads <LIST>         Comma-separated thread counts to test (default: 1,2,4,8,16,32)");
     println!("  -m, --memory <LIST>          Comma-separated memory sizes (e.g., 1GB,2GB,4GB or 1024,2048,4096)");
     println!("                               Default: 1GB,2GB,4GB,8GB,16GB,32GB");
     println!(
-        "  -d, --delimiter <CHAR>       CSV delimiter character (default: |) - ignored for Parquet"
+        "  -d, --delimiter <CHAR>       CSV delimiter character (default: ,) - ignored for Parquet"
     );
     println!("  --headers                    CSV file has headers - ignored for Parquet");
     println!("  --help                       Show this help message");
-    println!("\nColumn indices for TPC-H lineitem table:");
+    println!("\nColumn indices for NYC Yellow Taxi data:");
     for (i, name) in COLUMN_NAMES.iter().enumerate() {
         println!("  {}: {}", i, name);
     }
     println!("\nExamples:");
-    println!("  # Sort by orderkey and linenumber (default)");
-    println!("  {} lineitem.csv", env::args().next().unwrap());
-    println!("  {} lineitem.parquet", env::args().next().unwrap());
-    println!("\n  # Sort by shipdate");
+    println!("  # Sort by pickup and dropoff datetime (default)");
+    println!("  {} yellow_tripdata_2023.csv", env::args().next().unwrap());
     println!(
-        "  {} -k 10 -v 0,3 lineitem.csv",
+        "  {} yellow_tripdata_2023.parquet",
         env::args().next().unwrap()
     );
-    println!("\n  # Sort by extended price with custom thread counts");
+    println!("\n  # Sort by fare_amount");
     println!(
-        "  {} -k 5 -v 0,3,10 -t 1,4,8,16 lineitem.parquet",
+        "  {} -k 10 -v 1,2 yellow_tripdata_2023.csv",
+        env::args().next().unwrap()
+    );
+    println!("\n  # Sort by pickup datetime with custom thread counts");
+    println!(
+        "  {} -k 1 -v 2,10,16 -t 1,4,8,16 yellow_tripdata_2023.parquet",
         env::args().next().unwrap()
     );
     println!("\n  # Test with specific memory sizes");
     println!(
-        "  {} -m 2GB,4GB,8GB lineitem.csv",
+        "  {} -m 2GB,4GB,8GB yellow_tripdata_2023.csv",
         env::args().next().unwrap()
     );
     println!("\n  # Custom thread and memory combinations");
     println!(
-        "  {} -t 1,8,32 -m 1024,8192,32768 lineitem.parquet",
+        "  {} -t 1,8,32 -m 1024,8192,32768 yellow_tripdata_2023.parquet",
         env::args().next().unwrap()
     );
     process::exit(1);
@@ -302,8 +308,8 @@ fn print_first_lines(path: &str, num_lines: usize) -> Result<(), String> {
 }
 
 fn run_benchmark(config: Config) -> Result<(), String> {
-    println!("TPC-H Lineitem Sort Benchmark");
-    println!("=============================");
+    println!("NYC Yellow Taxi Trip Data Sort Benchmark");
+    println!("=========================================");
 
     if !Path::new(&config.file_path).exists() {
         return Err(format!("File {} not found", config.file_path));
@@ -432,32 +438,36 @@ fn run_single_benchmark(
 
     // Create input based on file type
     let input: Box<dyn SortInput> = if is_parquet {
-        let mut parquet_config = ParquetDirectConfig::default();
-        parquet_config.key_columns = config.key_columns.clone();
-        parquet_config.value_columns = config.value_columns.clone();
+        unimplemented!("Parquet support is not implemented yet");
+        // let mut parquet_config = ParquetDirectConfig::default();
+        // parquet_config.key_columns = config.key_columns.clone();
+        // parquet_config.value_columns = config.value_columns.clone();
 
-        let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config)?;
-        println!("  Total rows: {}", parquet_input.len());
-        Box::new(parquet_input)
+        // let parquet_input = ParquetInputDirect::new(&config.file_path, parquet_config)?;
+        // println!("  Total rows: {}", parquet_input.len());
+        // Box::new(parquet_input)
     } else {
-        // Create TPC-H lineitem schema for CSV
+        // Create NYC Yellow Taxi schema for CSV
         let schema = Arc::new(Schema::new(vec![
-            Field::new("l_orderkey", DataType::Int64, false), // 0
-            Field::new("l_partkey", DataType::Int64, false),  // 1
-            Field::new("l_suppkey", DataType::Int64, false),  // 2
-            Field::new("l_linenumber", DataType::Int32, false), // 3
-            Field::new("l_quantity", DataType::Float64, false), // 4
-            Field::new("l_extendedprice", DataType::Float64, false), // 5
-            Field::new("l_discount", DataType::Float64, false), // 6
-            Field::new("l_tax", DataType::Float64, false),    // 7
-            Field::new("l_returnflag", DataType::Utf8, false), // 8
-            Field::new("l_linestatus", DataType::Utf8, false), // 9
-            Field::new("l_shipdate", DataType::Date32, false), // 10
-            Field::new("l_commitdate", DataType::Date32, false), // 11
-            Field::new("l_receiptdate", DataType::Date32, false), // 12
-            Field::new("l_shipinstruct", DataType::Utf8, false), // 13
-            Field::new("l_shipmode", DataType::Utf8, false),  // 14
-            Field::new("l_comment", DataType::Utf8, false),   // 15
+            Field::new("vendorid", DataType::Int64, true), // 0
+            Field::new("tpep_pickup_datetime", DataType::Utf8, true), // 1 - stored as string in CSV
+            Field::new("tpep_dropoff_datetime", DataType::Utf8, true), // 2 - stored as string in CSV
+            Field::new("passenger_count", DataType::Float64, true),    // 3
+            Field::new("trip_distance", DataType::Float64, true),      // 4
+            Field::new("ratecodeid", DataType::Float64, true),         // 5
+            Field::new("store_and_fwd_flag", DataType::Utf8, true),    // 6
+            Field::new("pulocationid", DataType::Int64, true),         // 7
+            Field::new("dolocationid", DataType::Int64, true),         // 8
+            Field::new("payment_type", DataType::Int64, true),         // 9
+            Field::new("fare_amount", DataType::Float64, true),        // 10
+            Field::new("extra", DataType::Float64, true),              // 11
+            Field::new("mta_tax", DataType::Float64, true),            // 12
+            Field::new("tip_amount", DataType::Float64, true),         // 13
+            Field::new("tolls_amount", DataType::Float64, true),       // 14
+            Field::new("improvement_surcharge", DataType::Float64, true), // 15
+            Field::new("total_amount", DataType::Float64, true),       // 16
+            Field::new("congestion_surcharge", DataType::Float64, true), // 17
+            Field::new("airport_fee", DataType::Float64, true),        // 18
         ]));
 
         let mut csv_config = CsvDirectConfig::new(schema.clone());
@@ -759,20 +769,18 @@ fn print_entry(
         let (field_type, expected_size) = if is_parquet {
             // For Parquet, we need to know the data types to decode properly
             match col_idx {
-                0..=2 => ("Int64", 8),    // orderkey, partkey, suppkey
-                3 => ("Int32", 4),        // linenumber
-                4..=7 => ("Float64", 8),  // quantity, extendedprice, discount, tax
-                10..=12 => ("Date32", 4), // shipdate, commitdate, receiptdate
-                _ => ("Utf8", 0),         // Variable length strings
+                0 | 7..=9 => ("Int64", 8), // vendorid, pulocationid, dolocationid, payment_type
+                1..=2 => ("Int64", 8), // tpep_pickup_datetime, tpep_dropoff_datetime (stored as timestamp microseconds)
+                3..=5 | 10..=18 => ("Float64", 8), // passenger_count, trip_distance, rates, amounts
+                6 => ("Utf8", 0),      // store_and_fwd_flag
+                _ => ("Utf8", 0),      // Default to string
             }
         } else {
-            // For CSV, schema is defined in run_single_benchmark
+            // For CSV, timestamps are stored as strings
             match col_idx {
-                0..=2 => ("Int64", 8),
-                3 => ("Int32", 4),
-                4..=7 => ("Float64", 8),
-                10..=12 => ("Date32", 4),
-                _ => ("Utf8", 0),
+                0 | 7..=9 => ("Int64", 8), // vendorid, pulocationid, dolocationid, payment_type
+                3..=5 | 10..=18 => ("Float64", 8), // passenger_count, trip_distance, rates, amounts
+                _ => ("Utf8", 0),          // All others including timestamps as strings in CSV
             }
         };
 
@@ -839,19 +847,17 @@ fn print_entry(
 
         let (field_type, expected_size) = if is_parquet {
             match col_idx {
-                0..=2 => ("Int64", 8),
-                3 => ("Int32", 4),
-                4..=7 => ("Float64", 8),
-                10..=12 => ("Date32", 4),
-                _ => ("Utf8", 0),
+                0 | 7..=9 => ("Int64", 8), // vendorid, pulocationid, dolocationid, payment_type
+                1..=2 => ("Int64", 8),     // tpep_pickup_datetime, tpep_dropoff_datetime
+                3..=5 | 10..=18 => ("Float64", 8), // passenger_count, trip_distance, rates, amounts
+                6 => ("Utf8", 0),          // store_and_fwd_flag
+                _ => ("Utf8", 0),          // Default to string
             }
         } else {
             match col_idx {
-                0..=2 => ("Int64", 8),
-                3 => ("Int32", 4),
-                4..=7 => ("Float64", 8),
-                10..=12 => ("Date32", 4),
-                _ => ("Utf8", 0),
+                0 | 7..=9 => ("Int64", 8), // vendorid, pulocationid, dolocationid, payment_type
+                3..=5 | 10..=18 => ("Float64", 8), // passenger_count, trip_distance, rates, amounts
+                _ => ("Utf8", 0),          // All others including timestamps as strings in CSV
             }
         };
 
