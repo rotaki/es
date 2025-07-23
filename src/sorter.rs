@@ -237,6 +237,10 @@ impl Sorter for ExternalSorter {
             }));
         }
 
+        // total sample complexity is 1/eps^2 ln(1/delta)
+        // eps is accuracy and delta is failure probablity
+        let sample_size = (self.num_threads * 5) as usize;
+
         // Run Generation Phase (following sorter.rs pattern)
         let mut handles = vec![];
 
@@ -264,7 +268,7 @@ impl Sorter for ExternalSorter {
                         // Buffer is full, sort and flush
                         sort_buffer.sort();
 
-                        let mut output_run = RunImpl::from_writer(run_writer.take().unwrap())
+                        let mut output_run = RunImpl::from_writer_with_sample_size(run_writer.take().unwrap(), sample_size)
                             .expect("Failed to create run");
 
                         for (k, v) in sort_buffer.drain() {
@@ -288,7 +292,7 @@ impl Sorter for ExternalSorter {
                 if !sort_buffer.is_empty() {
                     sort_buffer.sort();
 
-                    let mut output_run = RunImpl::from_writer(run_writer.take().unwrap())
+                    let mut output_run = RunImpl::from_writer_with_sample_size(run_writer.take().unwrap(), sample_size)
                         .expect("Failed to create run");
 
                     for (k, v) in sort_buffer.drain() {
@@ -448,7 +452,7 @@ impl Sorter for ExternalSorter {
                     AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
                         .expect("Failed to create run writer");
                 let mut output_run =
-                    RunImpl::from_writer(writer).expect("Failed to create merge output run");
+                    RunImpl::from_writer_with_sample_size(writer, sample_size).expect("Failed to create merge output run");
 
                 // Merge this range directly into the output run
                 let merge_iter = MergeIterator::new(iterators);
