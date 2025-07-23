@@ -29,8 +29,12 @@ pub struct RunImpl {
 }
 
 impl RunImpl {
+
     pub fn from_writer(writer: AlignedWriter) -> Result<Self, String> {
-        // Get current position in the file
+        Self::from_writer_with_sample_size(writer, 100)
+    }
+
+    pub fn from_writer_with_sample_size(writer: AlignedWriter, sample_size: usize) -> Result<Self, String> {
         let start_bytes = writer.position() as usize;
         let fd = writer.get_fd();
 
@@ -41,7 +45,7 @@ impl RunImpl {
             start_bytes,
             total_bytes: 0,
             sparse_index: Vec::new(),
-            reservoir_size: 100, // Maximum sparse index size
+            reservoir_size: sample_size, // Maximum sparse index size
             entries_seen: 0,
         })
     }
