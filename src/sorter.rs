@@ -100,6 +100,7 @@ impl SortOutput for Output {
                     file_size: 0, // No file for in-memory data
                 }],
                 run_generation_time_ms: None,
+                merge_entry_num: vec![],
                 merge_time_ms: None,
                 run_generation_io_stats: None,
                 merge_io_stats: None,
@@ -347,6 +348,7 @@ impl Sorter for ExternalSorter {
                 num_runs: 0,
                 runs_info: initial_runs_info,
                 run_generation_time_ms: Some(run_generation_time_ms),
+                merge_entry_num: vec![],
                 merge_time_ms: None,
                 run_generation_io_stats,
                 merge_io_stats: None,
@@ -362,6 +364,7 @@ impl Sorter for ExternalSorter {
                 num_runs: initial_runs_count,
                 runs_info: initial_runs_info,
                 run_generation_time_ms: Some(run_generation_time_ms),
+                merge_entry_num: vec![],
                 merge_time_ms: None,
                 run_generation_io_stats,
                 merge_io_stats: None,
@@ -485,6 +488,10 @@ impl Sorter for ExternalSorter {
             num_runs: initial_runs_count,
             runs_info: initial_runs_info,
             run_generation_time_ms: Some(run_generation_time_ms),
+            merge_entry_num: (output_runs
+                .iter()
+                .map(|run| run.total_entries() as u64)
+                .collect()),
             merge_time_ms: Some(merge_time_ms),
             run_generation_io_stats,
             merge_io_stats,

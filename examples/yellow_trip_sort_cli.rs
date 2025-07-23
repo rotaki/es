@@ -505,6 +505,48 @@ fn run_single_benchmark(
     }
     println!("Run sizes: {}...", run_sizes);
 
+    // Print the merge entry numbers to show partition imbalance
+    if !stats.merge_entry_num.is_empty() {
+        println!(
+            "Partition balance (merge entry counts): {:?}",
+            stats.merge_entry_num
+        );
+        println!("This shows how perfect the partitioning is across runs.");
+
+        // Calculate balance metrics
+        let total_entries: u64 = stats.merge_entry_num.iter().sum();
+        let num_partitions = stats.merge_entry_num.len();
+        let avg_entries = total_entries as f64 / num_partitions as f64;
+        let max_entries = *stats.merge_entry_num.iter().max().unwrap_or(&0);
+        let min_entries = *stats.merge_entry_num.iter().min().unwrap_or(&0);
+        let imbalance_ratio = if min_entries > 0 {
+            max_entries as f64 / min_entries as f64
+        } else {
+            f64::INFINITY
+        };
+
+        println!("Partition statistics:");
+        println!("  Total partitions: {}", num_partitions);
+        println!("  Average entries per partition: {:.0}", avg_entries);
+        println!(
+            "  Min entries: {}, Max entries: {}",
+            min_entries, max_entries
+        );
+        println!("  Imbalance ratio (max/min): {:.2}", imbalance_ratio);
+
+        // Show detailed breakdown if there are few partitions
+        if num_partitions <= 16 {
+            println!("  Detailed breakdown:");
+            for (i, &count) in stats.merge_entry_num.iter().enumerate() {
+                let percentage = (count as f64 / total_entries as f64) * 100.0;
+                println!(
+                    "    Partition {}: {} entries ({:.1}%)",
+                    i, count, percentage
+                );
+            }
+        }
+    }
+
     // Count entries for verification (not included in performance metrics)
     println!("\nCounting entries for verification...");
 
