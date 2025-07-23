@@ -12,6 +12,7 @@ bytes = "1.10.1"
 crossbeam = "0.8.4"
 hex = "0.4.3"
 chrono = "0.4.41"
+clap = { version = "4.0", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.2"
@@ -19,3 +20,7 @@ tempfile = "3.2"
 [[bin]]
 name = "external_sort"
 path = "src/bin/external_sort.rs"
+
+[[bin]]
+name = "unified-sort"
+path = "examples/unified_sort_cli.rs"

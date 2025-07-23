@@ -7,14 +7,19 @@
 set -e
 
 # Configuration
-INPUT_FILE="${1:-lineitem_sf0.1.csv}"
-OUTPUT_CSV="${2:-benchmark_results_$(date +%Y%m%d_%H%M%S).csv}"
+INPUT_FILE="${1:-lineitem_sf10.csv}"
+OUTPUT_DIR="${2:-benchmark_results_$(date +%Y%m%d_%H%M%S)}"
+NUM_RUNS=3  # Number of times to run each experiment
 
-# Thread counts to test (x-axis)
-THREADS=(2 4 6 8)
+# Thread configurations to test
+# Format: "run_gen_threads,merge_threads"
+THREAD_CONFIGS=("2,2" "4,4" "6,6" "8,8" "4,2" "4,8" "8,4")
 
 # Memory sizes in MB (y-axis) - start with smaller sizes for testing
-MEMORY_MB=(1 2 3 4)
+MEMORY_MB=(32 64 96 128)
+
+# Create output directory
+mkdir -p "$OUTPUT_DIR"
 
 # Build the benchmark binary
 echo "Building lineitem_benchmark_cli..."
@@ -28,49 +33,57 @@ fi
 
 echo "Starting heatmap benchmark..."
 echo "Input file: $INPUT_FILE"
-echo "Output CSV: $OUTPUT_CSV"
-echo "Threads: ${THREADS[*]}"
+echo "Output directory: $OUTPUT_DIR"
+echo "Number of runs per configuration: $NUM_RUNS"
+echo "Thread configurations (run_gen,merge): ${THREAD_CONFIGS[*]}"
 echo "Memory sizes (MB): ${MEMORY_MB[*]}"
 echo
 
-# Create log file for raw benchmark outputs
-LOG_FILE="${OUTPUT_CSV%.csv}.log"
-echo "Raw benchmark outputs will be logged to: $LOG_FILE"
-
-# Total combinations
-TOTAL_COMBINATIONS=$((${#THREADS[@]} * ${#MEMORY_MB[@]}))
+# Total combinations (including multiple runs)
+TOTAL_COMBINATIONS=$((${#THREAD_CONFIGS[@]} * ${#MEMORY_MB[@]} * $NUM_RUNS))
 CURRENT_COMBINATION=0
 
 # Run benchmarks for each combination
 for memory in "${MEMORY_MB[@]}"; do
-    for threads in "${THREADS[@]}"; do
-        CURRENT_COMBINATION=$((CURRENT_COMBINATION + 1))
-        echo "Running benchmark [$CURRENT_COMBINATION/$TOTAL_COMBINATIONS]: $threads threads, ${memory}MB memory"
+    for thread_config in "${THREAD_CONFIGS[@]}"; do
+        # Parse thread configuration
+        IFS=',' read -r run_gen_threads merge_threads <<< "$thread_config"
         
-        # Log benchmark configuration
-        echo "=== BENCHMARK START: threads=$threads, memory_mb=$memory ===" >> "$LOG_FILE"
-        
-        # Run the benchmark and capture output (increased timeout)
-        ./target/release/examples/lineitem_benchmark_cli \
-            -t "$threads" \
-            -m "$memory" \
-            "$INPUT_FILE" >> "$LOG_FILE" 2>&1 || {
-            echo "  ERROR: Benchmark failed or timed out"
-            echo "ERROR: Benchmark failed or timed out" >> "$LOG_FILE"
-        }
-        
-        echo "=== BENCHMARK END: threads=$threads, memory_mb=$memory ===" >> "$LOG_FILE"
-        echo "" >> "$LOG_FILE"
-        echo "  Completed"
+        for run in $(seq 1 $NUM_RUNS); do
+            CURRENT_COMBINATION=$((CURRENT_COMBINATION + 1))
+            echo "Running benchmark [$CURRENT_COMBINATION/$TOTAL_COMBINATIONS]: run_gen=$run_gen_threads, merge=$merge_threads threads, ${memory}MB memory (run $run/$NUM_RUNS)"
+            
+            # Create log file for this specific run
+            LOG_FILE="$OUTPUT_DIR/benchmark_r${run_gen_threads}_g${merge_threads}_m${memory}_run${run}.log"
+            
+            # Log benchmark configuration
+            echo "=== BENCHMARK START: run_gen_threads=$run_gen_threads, merge_threads=$merge_threads, memory_mb=$memory, run=$run ===" > "$LOG_FILE"
+            
+            # Run the benchmark and capture output
+            ./target/release/examples/lineitem_benchmark_cli \
+                -r "$run_gen_threads" \
+                -g "$merge_threads" \
+                -m "$memory" \
+                "$INPUT_FILE" >> "$LOG_FILE" 2>&1 || {
+                echo "  ERROR: Benchmark failed or timed out"
+                echo "ERROR: Benchmark failed or timed out" >> "$LOG_FILE"
+            }
+            
+            echo "=== BENCHMARK END: run_gen_threads=$run_gen_threads, merge_threads=$merge_threads, memory_mb=$memory, run=$run ===" >> "$LOG_FILE"
+            echo "  Completed run $run"
+        done
+        echo ""
     done
 done
 
 echo "Benchmark completed!"
-echo "Raw benchmark outputs saved to: $LOG_FILE"
+echo "All benchmark outputs saved to directory: $OUTPUT_DIR"
 echo
 echo "Summary statistics:"
-echo "- Total combinations tested: $TOTAL_COMBINATIONS"
-echo "- Thread range: ${THREADS[0]} to ${THREADS[-1]}"
+echo "- Total benchmark runs: $TOTAL_COMBINATIONS"
+echo "- Configurations tested: $((${#THREAD_CONFIGS[@]} * ${#MEMORY_MB[@]}))"
+echo "- Runs per configuration: $NUM_RUNS"
+echo "- Thread configurations: ${#THREAD_CONFIGS[@]}"
 echo "- Memory range: ${MEMORY_MB[0]}MB to ${MEMORY_MB[-1]}MB"
 echo
-echo "To parse results and create heatmaps, run: python3 create_heatmaps.py $LOG_FILE"
+echo "To parse results and create heatmaps, run: python3 create_heatmaps.py $OUTPUT_DIR"
