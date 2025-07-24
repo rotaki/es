@@ -44,6 +44,13 @@ enum Commands {
         #[arg(short, long, default_value = ",")]
         delimiter: char,
 
+        /// Key columns for sorting (comma-separated column indices, e.g., 0,3)
+        #[arg(short = 'k', long, value_delimiter = ',')]
+        key_columns: Option<Vec<usize>>,
+
+        /// Payload columns (comma-separated column indices, e.g., 1,2,4)
+        #[arg(short = 'p', long, value_delimiter = ',')]
+        payload_columns: Option<Vec<usize>>,
 
         /// Directory for temporary files
         #[arg(short = 't', long, default_value = ".")]
@@ -88,6 +95,18 @@ enum Commands {
         /// Verify sorted output
         #[arg(short, long)]
         verify: bool,
+
+        /// Number of benchmark runs per configuration
+        #[arg(long, default_value = "1")]
+        benchmark_runs: usize,
+
+        /// Comma-separated thread counts to test (e.g., 1,2,4,8)
+        #[arg(long, value_delimiter = ',')]
+        thread_counts: Option<Vec<usize>>,
+
+        /// Comma-separated memory sizes to test (e.g., 512MB,1GB,2GB or 512,1024,2048)
+        #[arg(long, value_delimiter = ',')]
+        memory_sizes: Option<Vec<String>>,
     },
 }
 
@@ -97,6 +116,93 @@ enum CsvSchema {
     Lineitem,
     /// NYC yellow trip data schema
     YellowTrip,
+}
+
+// Benchmark-related structs
+#[derive(Default)]
+struct RunStats {
+    total_time: f64,
+    run_gen_time: f64,
+    merge_time: f64,
+    runs_count: usize,
+    run_gen_read_ops: u64,
+    run_gen_read_mb: f64,
+    run_gen_write_ops: u64,
+    run_gen_write_mb: f64,
+    merge_read_ops: u64,
+    merge_read_mb: f64,
+    merge_write_ops: u64,
+    merge_write_mb: f64,
+}
+
+#[derive(Clone)]
+struct BenchmarkResult {
+    threads: usize,
+    memory_mb: usize,
+    memory_str: String,
+    runs: usize,
+    total_time: f64,
+    run_gen_time: f64,
+    merge_time: f64,
+    entries: usize,
+    throughput: f64,
+    read_mb: f64,
+    write_mb: f64,
+    run_gen_read_ops: u64,
+    run_gen_read_mb: f64,
+    run_gen_write_ops: u64,
+    run_gen_write_mb: f64,
+    merge_read_ops: u64,
+    merge_read_mb: f64,
+    merge_write_ops: u64,
+    merge_write_mb: f64,
+}
+
+fn lineitem_schema(key_columns: Vec<usize>, value_columns: Vec<usize>) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l_orderkey", DataType::Int64, false),       // 0
+        Field::new("l_partkey", DataType::Int64, false),        // 1
+        Field::new("l_suppkey", DataType::Int64, false),        // 2
+        Field::new("l_linenumber", DataType::Int32, false),     // 3
+        Field::new("l_quantity", DataType::Float64, false),     // 4
+        Field::new("l_extendedprice", DataType::Float64, false),// 5
+        Field::new("l_discount", DataType::Float64, false),     // 6
+        Field::new("l_tax", DataType::Float64, false),         // 7
+        Field::new("l_returnflag", DataType::Utf8, false),      // 8
+        Field::new("l_linestatus", DataType::Utf8, false),      // 9
+        Field::new("l_shipdate", DataType::Date32, false),      // 10
+        Field::new("l_commitdate", DataType::Date32, false),    // 11
+        Field::new("l_receiptdate", DataType::Date32, false),   // 12
+        Field::new("l_shipinstruct", DataType::Utf8, false),    // 13
+        Field::new("l_shipmode", DataType::Utf8, false),        // 14
+        Field::new("l_comment", DataType::Utf8, false),         // 15
+    ]));
+    (schema, key_columns, value_columns)
+}
+
+fn yellow_taxi_schema(key_columns: Vec<usize>, value_columns: Vec<usize>) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("vendorid", DataType::Int64, true),                // 0
+        Field::new("tpep_pickup_datetime", DataType::Utf8, true),     // 1
+        Field::new("tpep_dropoff_datetime", DataType::Utf8, true),    // 2
+        Field::new("passenger_count", DataType::Int64, true),         // 3
+        Field::new("trip_distance", DataType::Float64, true),         // 4
+        Field::new("ratecodeid", DataType::Int64, true),             // 5
+        Field::new("store_and_fwd_flag", DataType::Utf8, true),      // 6
+        Field::new("pulocationid", DataType::Int64, true),           // 7
+        Field::new("dolocationid", DataType::Int64, true),           // 8
+        Field::new("payment_type", DataType::Int64, true),           // 9
+        Field::new("fare_amount", DataType::Float64, true),          // 10
+        Field::new("extra", DataType::Float64, true),                // 11
+        Field::new("mta_tax", DataType::Float64, true),              // 12
+        Field::new("tip_amount", DataType::Float64, true),           // 13
+        Field::new("tolls_amount", DataType::Float64, true),         // 14
+        Field::new("improvement_surcharge", DataType::Float64, true),// 15
+        Field::new("total_amount", DataType::Float64, true),         // 16
+        Field::new("congestion_surcharge", DataType::Float64, true), // 17
+        Field::new("airport_fee", DataType::Float64, true),          // 18
+    ]));
+    (schema, key_columns, value_columns)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -110,8 +216,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             merge_threads,
             memory_mb,
             delimiter,
+            key_columns,
+            payload_columns,
             temp_dir,
-            benchmark,
             benchmark_runs,
             thread_counts,
             memory_sizes,
@@ -123,8 +230,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 merge_threads,
                 memory_mb,
                 delimiter,
+                key_columns,
+                payload_columns,
                 &temp_dir,
-                benchmark,
                 benchmark_runs,
                 thread_counts,
                 memory_sizes,
@@ -137,6 +245,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             memory_mb,
             temp_dir,
             verify,
+            benchmark_runs,
+            thread_counts,
+            memory_sizes,
         } => {
             sort_gensort(
                 &input,
@@ -145,23 +256,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 memory_mb,
                 &temp_dir,
                 verify,
-            )?;
-        }
-        Commands::Auto {
-            input,
-            run_gen_threads,
-            merge_threads,
-            memory_mb,
-            temp_dir,
-            delimiter,
-        } => {
-            auto_detect_and_sort(
-                &input,
-                run_gen_threads,
-                merge_threads,
-                memory_mb,
-                &temp_dir,
-                delimiter,
+                benchmark_runs,
+                thread_counts,
+                memory_sizes,
             )?;
         }
     }
@@ -176,8 +273,9 @@ fn sort_csv(
     merge_threads: usize,
     memory_mb: usize,
     delimiter: char,
+    key_columns: Option<Vec<usize>>,
+    payload_columns: Option<Vec<usize>>,
     temp_dir: &Path,
-    benchmark: bool,
     benchmark_runs: usize,
     thread_counts: Option<Vec<usize>>,
     memory_sizes: Option<Vec<String>>,
@@ -189,138 +287,59 @@ fn sort_csv(
     println!("Memory limit: {} MB", memory_mb);
     println!("Delimiter: '{}'", delimiter);
     
+    // Use provided key/payload columns or defaults (key=0, payload=1)
+    let key_cols = key_columns.unwrap_or_else(|| vec![0]);
+    let value_cols = payload_columns.unwrap_or_else(|| vec![1]);
+    
+    println!("Key columns: {:?}", key_cols);
+    println!("Payload columns: {:?}", value_cols);
+    
     // Create schema and configure based on type
-    let (arrow_schema, key_columns, value_columns) = match schema {
+    let (arrow_schema, final_key_columns, final_value_columns) = match schema {
         CsvSchema::Lineitem => {
-            println!("Using lineitem schema - sorting by l_orderkey, l_linenumber");
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("l_orderkey", DataType::Int64, false),       // 0
-                Field::new("l_partkey", DataType::Int64, false),        // 1
-                Field::new("l_suppkey", DataType::Int64, false),        // 2
-                Field::new("l_linenumber", DataType::Int32, false),     // 3
-                Field::new("l_quantity", DataType::Float64, false),     // 4
-                Field::new("l_extendedprice", DataType::Float64, false),// 5
-                Field::new("l_discount", DataType::Float64, false),     // 6
-                Field::new("l_tax", DataType::Float64, false),         // 7
-                Field::new("l_returnflag", DataType::Utf8, false),      // 8
-                Field::new("l_linestatus", DataType::Utf8, false),      // 9
-                Field::new("l_shipdate", DataType::Date32, false),      // 10
-                Field::new("l_commitdate", DataType::Date32, false),    // 11
-                Field::new("l_receiptdate", DataType::Date32, false),   // 12
-                Field::new("l_shipinstruct", DataType::Utf8, false),    // 13
-                Field::new("l_shipmode", DataType::Utf8, false),        // 14
-                Field::new("l_comment", DataType::Utf8, false),         // 15
-            ]));
-            let key_cols = vec![0, 3]; // l_orderkey, l_linenumber
-            let value_cols = vec![1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-            (schema, key_cols, value_cols)
+            println!("Using lineitem schema");
+            lineitem_schema(key_cols, value_cols)
         }
         CsvSchema::YellowTrip => {
-            println!("Using yellow trip schema - sorting by pickup_datetime");
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("vendorid", DataType::Int64, true),                // 0
-                Field::new("tpep_pickup_datetime", DataType::Utf8, true),     // 1
-                Field::new("tpep_dropoff_datetime", DataType::Utf8, true),    // 2
-                Field::new("passenger_count", DataType::Int64, true),         // 3
-                Field::new("trip_distance", DataType::Float64, true),         // 4
-                Field::new("ratecodeid", DataType::Int64, true),             // 5
-                Field::new("store_and_fwd_flag", DataType::Utf8, true),      // 6
-                Field::new("pulocationid", DataType::Int64, true),           // 7
-                Field::new("dolocationid", DataType::Int64, true),           // 8
-                Field::new("payment_type", DataType::Int64, true),           // 9
-                Field::new("fare_amount", DataType::Float64, true),          // 10
-                Field::new("extra", DataType::Float64, true),                // 11
-                Field::new("mta_tax", DataType::Float64, true),              // 12
-                Field::new("tip_amount", DataType::Float64, true),           // 13
-                Field::new("tolls_amount", DataType::Float64, true),         // 14
-                Field::new("improvement_surcharge", DataType::Float64, true),// 15
-                Field::new("total_amount", DataType::Float64, true),         // 16
-                Field::new("congestion_surcharge", DataType::Float64, true), // 17
-                Field::new("airport_fee", DataType::Float64, true),          // 18
-            ]));
-            let key_cols = vec![1]; // tpep_pickup_datetime
-            let value_cols = vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
-            (schema, key_cols, value_cols)
+            println!("Using yellow trip schema");
+            yellow_taxi_schema(key_cols, value_cols)
         }
     };
 
     let mut config = CsvDirectConfig::new(arrow_schema);
     config.delimiter = delimiter as u8;
-    config.key_columns = key_columns;
-    config.value_columns = value_columns;
+    config.key_columns = final_key_columns;
+    config.value_columns = final_value_columns;
     config.has_headers = true;
 
-    if benchmark {
-        // Use provided thread counts and memory sizes, or defaults
-        let threads = thread_counts.unwrap_or_else(|| vec![run_gen_threads]);
-        let mem_sizes = memory_sizes.unwrap_or_else(|| vec![format!("{}MB", memory_mb)]);
+    // Use provided thread counts and memory sizes, or defaults
+    let threads = thread_counts.unwrap_or_else(|| vec![run_gen_threads]);
+    let mem_sizes = memory_sizes.unwrap_or_else(|| vec![format!("{}MB", memory_mb)]);
         
-        run_comprehensive_benchmark(
-            input,
-            schema,
-            delimiter,
-            &threads,
-            &mem_sizes,
-            temp_dir,
-            benchmark_runs,
-        )
-    } else {
-        // Save column info before moving config
-        let key_cols = config.key_columns.clone();
-        let value_cols = config.value_columns.clone();
-        
-        let csv_input = CsvInputDirect::new(input, config)?;
-        let record_count = count_csv_records(&csv_input)?;
-        
-        let mut sorter = ExternalSorter::new_with_threads_and_dir(
-            run_gen_threads,
-            merge_threads,
-            memory_mb * 1024 * 1024,
-            temp_dir,
-        );
-
-        let start = Instant::now();
-        let output = sorter.sort(Box::new(csv_input))?;
-        let elapsed = start.elapsed();
-
-        print_sort_results(record_count, elapsed, &output);
-        print_sample_records(&output, &key_cols, &value_cols, schema);
-        Ok(())
-    }
+    run_comprehensive_benchmark(
+        input,
+        schema,
+        delimiter,
+        key_cols,
+        value_cols,
+        &threads,
+        &mem_sizes,
+        temp_dir,
+        benchmark_runs,
+    )
 }
 
 fn run_comprehensive_benchmark(
     input: &Path,
     schema: CsvSchema,
     delimiter: char,
+    key_columns: Vec<usize>,
+    value_columns: Vec<usize>,
     thread_counts: &[usize],
     memory_sizes: &[String],
     temp_dir: &Path,
     num_runs: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    #[derive(Clone)]
-    struct BenchmarkResult {
-        threads: usize,
-        memory_mb: usize,
-        memory_str: String,
-        runs: usize,
-        total_time: f64,
-        run_gen_time: f64,
-        merge_time: f64,
-        entries: usize,
-        throughput: f64,
-        read_mb: f64,
-        write_mb: f64,
-        run_gen_read_ops: u64,
-        run_gen_read_mb: f64,
-        run_gen_write_ops: u64,
-        run_gen_write_mb: f64,
-        merge_read_ops: u64,
-        merge_read_mb: f64,
-        merge_write_ops: u64,
-        merge_write_mb: f64,
-    }
-
     // Parse memory sizes
     let memory_configs: Vec<(usize, String)> = memory_sizes
         .iter()
@@ -343,57 +362,19 @@ fn run_comprehensive_benchmark(
     let mut all_results = Vec::new();
 
     // Get one record count for display
-    let arrow_schema = match schema {
-        CsvSchema::Lineitem => Arc::new(Schema::new(vec![
-            Field::new("l_orderkey", DataType::Int64, false),
-            Field::new("l_partkey", DataType::Int64, false),
-            Field::new("l_suppkey", DataType::Int64, false),
-            Field::new("l_linenumber", DataType::Int32, false),
-            Field::new("l_quantity", DataType::Float64, false),
-            Field::new("l_extendedprice", DataType::Float64, false),
-            Field::new("l_discount", DataType::Float64, false),
-            Field::new("l_tax", DataType::Float64, false),
-            Field::new("l_returnflag", DataType::Utf8, false),
-            Field::new("l_linestatus", DataType::Utf8, false),
-            Field::new("l_shipdate", DataType::Date32, false),
-            Field::new("l_commitdate", DataType::Date32, false),
-            Field::new("l_receiptdate", DataType::Date32, false),
-            Field::new("l_shipinstruct", DataType::Utf8, false),
-            Field::new("l_shipmode", DataType::Utf8, false),
-            Field::new("l_comment", DataType::Utf8, false),
-        ])),
-        CsvSchema::YellowTrip => Arc::new(Schema::new(vec![
-            Field::new("vendorid", DataType::Int64, true),
-            Field::new("tpep_pickup_datetime", DataType::Utf8, true),
-            Field::new("tpep_dropoff_datetime", DataType::Utf8, true),
-            Field::new("passenger_count", DataType::Int64, true),
-            Field::new("trip_distance", DataType::Float64, true),
-            Field::new("ratecodeid", DataType::Int64, true),
-            Field::new("store_and_fwd_flag", DataType::Utf8, true),
-            Field::new("pulocationid", DataType::Int64, true),
-            Field::new("dolocationid", DataType::Int64, true),
-            Field::new("payment_type", DataType::Int64, true),
-            Field::new("fare_amount", DataType::Float64, true),
-            Field::new("extra", DataType::Float64, true),
-            Field::new("mta_tax", DataType::Float64, true),
-            Field::new("tip_amount", DataType::Float64, true),
-            Field::new("tolls_amount", DataType::Float64, true),
-            Field::new("improvement_surcharge", DataType::Float64, true),
-            Field::new("total_amount", DataType::Float64, true),
-            Field::new("congestion_surcharge", DataType::Float64, true),
-            Field::new("airport_fee", DataType::Float64, true),
-        ])),
-    };
-
-    let (key_columns, value_columns) = match schema {
-        CsvSchema::Lineitem => (vec![0, 3], vec![1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
-        CsvSchema::YellowTrip => (vec![1], vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]),
+    let (arrow_schema, final_key_columns, final_value_columns) = match schema {
+        CsvSchema::Lineitem => {
+            lineitem_schema(key_columns.clone(), value_columns.clone())
+        }
+        CsvSchema::YellowTrip => {
+            yellow_taxi_schema(key_columns.clone(), value_columns.clone())
+        }
     };
 
     let mut test_config = CsvDirectConfig::new(arrow_schema.clone());
     test_config.delimiter = delimiter as u8;
-    test_config.key_columns = key_columns.clone();
-    test_config.value_columns = value_columns.clone();
+    test_config.key_columns = final_key_columns.clone();
+    test_config.value_columns = final_value_columns.clone();
     test_config.has_headers = true;
     
     let test_input = CsvInputDirect::new(input, test_config)?;
@@ -412,20 +393,16 @@ fn run_comprehensive_benchmark(
         for (memory_mb, memory_str) in &memory_configs {
             println!("Testing {} threads, {} memory...", threads, memory_str);
             
-            let mut run_times = Vec::new();
-            let mut run_gen_times = Vec::new();
-            let mut merge_times = Vec::new();
-            let mut runs_counts = Vec::new();
-            let mut run_gen_io_stats = Vec::new();
-            let mut merge_io_stats = Vec::new();
+            let mut accumulated_stats = RunStats::default();
+            let mut valid_runs = 0;
 
             for run in 1..=num_runs {
                 print!("  Run {}/{}: ", run, num_runs);
                 
                 let mut config = CsvDirectConfig::new(arrow_schema.clone());
                 config.delimiter = delimiter as u8;
-                config.key_columns = key_columns.clone();
-                config.value_columns = value_columns.clone();
+                config.key_columns = final_key_columns.clone();
+                config.value_columns = final_value_columns.clone();
                 config.has_headers = true;
                 
                 let csv_input = CsvInputDirect::new(input, config)?;
@@ -442,74 +419,52 @@ fn run_comprehensive_benchmark(
                 let elapsed = start.elapsed();
                 let stats = output.stats();
 
-                run_times.push(elapsed.as_secs_f64());
-                runs_counts.push(stats.num_runs);
+                // Accumulate stats instead of pushing to vectors
+                accumulated_stats.total_time += elapsed.as_secs_f64();
+                accumulated_stats.runs_count += stats.num_runs;
                 
                 if let Some(rg_time) = stats.run_generation_time_ms {
-                    run_gen_times.push(rg_time as f64 / 1000.0);
+                    accumulated_stats.run_gen_time += rg_time as f64 / 1000.0;
                 }
                 if let Some(m_time) = stats.merge_time_ms {
-                    merge_times.push(m_time as f64 / 1000.0);
+                    accumulated_stats.merge_time += m_time as f64 / 1000.0;
                 }
                 if let Some(ref io) = stats.run_generation_io_stats {
-                    run_gen_io_stats.push(io.clone());
+                    accumulated_stats.run_gen_read_ops += io.read_ops;
+                    accumulated_stats.run_gen_read_mb += io.read_bytes as f64 / 1_000_000.0;
+                    accumulated_stats.run_gen_write_ops += io.write_ops;
+                    accumulated_stats.run_gen_write_mb += io.write_bytes as f64 / 1_000_000.0;
                 }
                 if let Some(ref io) = stats.merge_io_stats {
-                    merge_io_stats.push(io.clone());
+                    accumulated_stats.merge_read_ops += io.read_ops;
+                    accumulated_stats.merge_read_mb += io.read_bytes as f64 / 1_000_000.0;
+                    accumulated_stats.merge_write_ops += io.write_ops;
+                    accumulated_stats.merge_write_mb += io.write_bytes as f64 / 1_000_000.0;
                 }
 
+                valid_runs += 1;
                 println!("{:.2}s", elapsed.as_secs_f64());
             }
 
-            // Calculate averages
-            let avg_total = run_times.iter().sum::<f64>() / run_times.len() as f64;
-            let avg_run_gen = if !run_gen_times.is_empty() {
-                run_gen_times.iter().sum::<f64>() / run_gen_times.len() as f64
-            } else { 0.0 };
-            let avg_merge = if !merge_times.is_empty() {
-                merge_times.iter().sum::<f64>() / merge_times.len() as f64
-            } else { 0.0 };
-            let avg_runs = if !runs_counts.is_empty() {
-                runs_counts.iter().sum::<usize>() / runs_counts.len()
-            } else { 0 };
+            // Calculate averages from accumulated stats
+            let runs_f64 = valid_runs as f64;
+            let avg_total = accumulated_stats.total_time / runs_f64;
+            let avg_run_gen = accumulated_stats.run_gen_time / runs_f64;
+            let avg_merge = accumulated_stats.merge_time / runs_f64;
+            let avg_runs = accumulated_stats.runs_count / valid_runs;
 
             // Average I/O stats
-            let mut total_read_mb = 0.0;
-            let mut total_write_mb = 0.0;
-            let mut rg_read_ops = 0u64;
-            let mut rg_read_mb = 0.0;
-            let mut rg_write_ops = 0u64;
-            let mut rg_write_mb = 0.0;
-            let mut m_read_ops = 0u64;
-            let mut m_read_mb = 0.0;
-            let mut m_write_ops = 0u64;
-            let mut m_write_mb = 0.0;
+            let rg_read_ops = (accumulated_stats.run_gen_read_ops as f64 / runs_f64) as u64;
+            let rg_read_mb = accumulated_stats.run_gen_read_mb / runs_f64;
+            let rg_write_ops = (accumulated_stats.run_gen_write_ops as f64 / runs_f64) as u64;
+            let rg_write_mb = accumulated_stats.run_gen_write_mb / runs_f64;
+            let m_read_ops = (accumulated_stats.merge_read_ops as f64 / runs_f64) as u64;
+            let m_read_mb = accumulated_stats.merge_read_mb / runs_f64;
+            let m_write_ops = (accumulated_stats.merge_write_ops as f64 / runs_f64) as u64;
+            let m_write_mb = accumulated_stats.merge_write_mb / runs_f64;
 
-            for io in &run_gen_io_stats {
-                rg_read_ops += io.read_ops;
-                rg_read_mb += io.read_bytes as f64 / 1_000_000.0;
-                rg_write_ops += io.write_ops;
-                rg_write_mb += io.write_bytes as f64 / 1_000_000.0;
-            }
-            for io in &merge_io_stats {
-                m_read_ops += io.read_ops;
-                m_read_mb += io.read_bytes as f64 / 1_000_000.0;
-                m_write_ops += io.write_ops;
-                m_write_mb += io.write_bytes as f64 / 1_000_000.0;
-            }
-
-            let num_io_runs = run_gen_io_stats.len().max(1) as f64;
-            rg_read_ops = (rg_read_ops as f64 / num_io_runs) as u64;
-            rg_read_mb /= num_io_runs;
-            rg_write_ops = (rg_write_ops as f64 / num_io_runs) as u64;
-            rg_write_mb /= num_io_runs;
-            m_read_ops = (m_read_ops as f64 / num_io_runs) as u64;
-            m_read_mb /= num_io_runs;
-            m_write_ops = (m_write_ops as f64 / num_io_runs) as u64;
-            m_write_mb /= num_io_runs;
-
-            total_read_mb = rg_read_mb + m_read_mb;
-            total_write_mb = rg_write_mb + m_write_mb;
+            let total_read_mb = rg_read_mb + m_read_mb;
+            let total_write_mb = rg_write_mb + m_write_mb;
 
             all_results.push(BenchmarkResult {
                 threads,
@@ -536,6 +491,195 @@ fn run_comprehensive_benchmark(
     }
 
     // Print summary table
+    print_benchmark_summary(&all_results);
+    
+    Ok(())
+}
+
+fn sort_gensort(
+    input: &Path,
+    run_gen_threads: usize,
+    merge_threads: usize,
+    memory_mb: usize,
+    temp_dir: &Path,
+    verify: bool,
+    benchmark_runs: usize,
+    thread_counts: Option<Vec<usize>>,
+    memory_sizes: Option<Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Sorting GenSort binary file");
+    println!("Input: {:?}", input);
+    println!("Run generation threads: {}", run_gen_threads);
+    println!("Merge threads: {}", merge_threads);
+    println!("Memory limit: {} MB", memory_mb);
+    println!();
+
+    // Use provided thread counts and memory sizes, or defaults
+    let threads = thread_counts.unwrap_or_else(|| vec![run_gen_threads]);
+    let mem_sizes = memory_sizes.unwrap_or_else(|| vec![format!("{}MB", memory_mb)]);
+        
+    run_gensort_benchmark(
+        input,
+        &threads,
+        &mem_sizes,
+        temp_dir,
+        benchmark_runs,
+        verify,
+    )
+}
+
+fn run_gensort_benchmark(
+    input: &Path,
+    thread_counts: &[usize],
+    memory_sizes: &[String],
+    temp_dir: &Path,
+    num_runs: usize,
+    verify: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Parse memory sizes
+    let memory_configs: Vec<(usize, String)> = memory_sizes
+        .iter()
+        .map(|s| {
+            let s = s.trim();
+            let (num, unit) = if s.to_uppercase().ends_with("GB") {
+                let num_str = s[..s.len() - 2].trim();
+                (num_str.parse::<f64>().unwrap_or(1.0) * 1024.0, s.to_string())
+            } else if s.to_uppercase().ends_with("MB") {
+                let num_str = s[..s.len() - 2].trim();
+                (num_str.parse::<f64>().unwrap_or(1024.0), s.to_string())
+            } else {
+                // Assume MB if no unit
+                (s.parse::<f64>().unwrap_or(1024.0), format!("{}MB", s))
+            };
+            (num as usize, unit)
+        })
+        .collect();
+
+    let mut all_results = Vec::new();
+
+    // Get record count
+    let gensort_input = GenSortInputDirect::new(input)?;
+    let total_entries = gensort_input.len();
+
+    println!("\n=== GENSORT BENCHMARK MODE ===");
+    println!("Input file: {:?}", input);
+    println!("Total entries: {}", total_entries);
+    println!("Thread counts: {:?}", thread_counts);
+    println!("Memory sizes: {:?}", memory_sizes);
+    println!("Runs per configuration: {}", num_runs);
+    println!("Verify output: {}", verify);
+    println!();
+
+    // Run benchmarks for each configuration
+    for &threads in thread_counts {
+        for (memory_mb, memory_str) in &memory_configs {
+            println!("Testing {} threads, {} memory...", threads, memory_str);
+            
+            let mut accumulated_stats = RunStats::default();
+            let mut valid_runs = 0;
+
+            for run in 1..=num_runs {
+                print!("  Run {}/{}: ", run, num_runs);
+                
+                let gensort_input = GenSortInputDirect::new(input)?;
+                
+                let mut sorter = ExternalSorter::new_with_threads_and_dir(
+                    threads,
+                    threads,
+                    memory_mb * 1024 * 1024,
+                    temp_dir,
+                );
+
+                let start = Instant::now();
+                let output = sorter.sort(Box::new(gensort_input))?;
+                let elapsed = start.elapsed();
+                let stats = output.stats();
+
+                // Accumulate stats
+                accumulated_stats.total_time += elapsed.as_secs_f64();
+                accumulated_stats.runs_count += stats.num_runs;
+                
+                if let Some(rg_time) = stats.run_generation_time_ms {
+                    accumulated_stats.run_gen_time += rg_time as f64 / 1000.0;
+                }
+                if let Some(m_time) = stats.merge_time_ms {
+                    accumulated_stats.merge_time += m_time as f64 / 1000.0;
+                }
+                if let Some(ref io) = stats.run_generation_io_stats {
+                    accumulated_stats.run_gen_read_ops += io.read_ops;
+                    accumulated_stats.run_gen_read_mb += io.read_bytes as f64 / 1_000_000.0;
+                    accumulated_stats.run_gen_write_ops += io.write_ops;
+                    accumulated_stats.run_gen_write_mb += io.write_bytes as f64 / 1_000_000.0;
+                }
+                if let Some(ref io) = stats.merge_io_stats {
+                    accumulated_stats.merge_read_ops += io.read_ops;
+                    accumulated_stats.merge_read_mb += io.read_bytes as f64 / 1_000_000.0;
+                    accumulated_stats.merge_write_ops += io.write_ops;
+                    accumulated_stats.merge_write_mb += io.write_bytes as f64 / 1_000_000.0;
+                }
+
+                valid_runs += 1;
+                println!("{:.2}s", elapsed.as_secs_f64());
+
+                // Verify if requested (only on first run to save time)
+                if verify && run == 1 {
+                    println!("    Verifying sorted output...");
+                    verify_sorted_output(&output)?;
+                    println!("    Verification passed!");
+                }
+            }
+
+            // Calculate averages
+            let runs_f64 = valid_runs as f64;
+            let avg_total = accumulated_stats.total_time / runs_f64;
+            let avg_run_gen = accumulated_stats.run_gen_time / runs_f64;
+            let avg_merge = accumulated_stats.merge_time / runs_f64;
+            let avg_runs = accumulated_stats.runs_count / valid_runs;
+
+            // Average I/O stats
+            let rg_read_ops = (accumulated_stats.run_gen_read_ops as f64 / runs_f64) as u64;
+            let rg_read_mb = accumulated_stats.run_gen_read_mb / runs_f64;
+            let rg_write_ops = (accumulated_stats.run_gen_write_ops as f64 / runs_f64) as u64;
+            let rg_write_mb = accumulated_stats.run_gen_write_mb / runs_f64;
+            let m_read_ops = (accumulated_stats.merge_read_ops as f64 / runs_f64) as u64;
+            let m_read_mb = accumulated_stats.merge_read_mb / runs_f64;
+            let m_write_ops = (accumulated_stats.merge_write_ops as f64 / runs_f64) as u64;
+            let m_write_mb = accumulated_stats.merge_write_mb / runs_f64;
+
+            let total_read_mb = rg_read_mb + m_read_mb;
+            let total_write_mb = rg_write_mb + m_write_mb;
+
+            all_results.push(BenchmarkResult {
+                threads,
+                memory_mb: *memory_mb,
+                memory_str: memory_str.clone(),
+                runs: avg_runs,
+                total_time: avg_total,
+                run_gen_time: avg_run_gen,
+                merge_time: avg_merge,
+                entries: total_entries,
+                throughput: total_entries as f64 / avg_total / 1_000_000.0,
+                read_mb: total_read_mb,
+                write_mb: total_write_mb,
+                run_gen_read_ops: rg_read_ops,
+                run_gen_read_mb: rg_read_mb,
+                run_gen_write_ops: rg_write_ops,
+                run_gen_write_mb: rg_write_mb,
+                merge_read_ops: m_read_ops,
+                merge_read_mb: m_read_mb,
+                merge_write_ops: m_write_ops,
+                merge_write_mb: m_write_mb,
+            });
+        }
+    }
+
+    // Print summary table
+    print_benchmark_summary(&all_results);
+    
+    Ok(())
+}
+
+fn print_benchmark_summary(results: &[BenchmarkResult]) {
     println!("\n{}", "=".repeat(120));
     println!("Benchmark Results Summary");
     println!("{}", "=".repeat(120));
@@ -546,7 +690,7 @@ fn run_comprehensive_benchmark(
         "", "", "", "", "", "", "", "(M entries/s)", "", "");
     println!("{}", "-".repeat(120));
 
-    for result in &all_results {
+    for result in results {
         println!("{:<8} {:<12} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
             result.threads,
             result.memory_str,
@@ -572,7 +716,7 @@ fn run_comprehensive_benchmark(
         "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)");
     println!("{}", "-".repeat(100));
 
-    for result in &all_results {
+    for result in results {
         println!("{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
             result.threads,
             result.memory_str,
@@ -583,49 +727,6 @@ fn run_comprehensive_benchmark(
         );
     }
     println!("{}", "-".repeat(100));
-
-    Ok(())
-}
-
-fn sort_gensort(
-    input: &Path,
-    run_gen_threads: usize,
-    merge_threads: usize,
-    memory_mb: usize,
-    temp_dir: &Path,
-    verify: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Sorting GenSort binary file");
-    println!("Input: {:?}", input);
-    println!("Run generation threads: {}", run_gen_threads);
-    println!("Merge threads: {}", merge_threads);
-    println!("Memory limit: {} MB", memory_mb);
-    println!();
-
-    let gensort_input = GenSortInputDirect::new(input)?;
-    let num_records = gensort_input.len();
-    println!("Total records: {}", num_records);
-
-    let mut sorter = ExternalSorter::new_with_threads_and_dir(
-        run_gen_threads,
-        merge_threads,
-        memory_mb * 1024 * 1024,
-        temp_dir,
-    );
-
-    let start = Instant::now();
-    let output = sorter.sort(Box::new(gensort_input))?;
-    let elapsed = start.elapsed();
-
-    print_sort_results(num_records, elapsed, &output);
-    print_gensort_sample_records(&output);
-
-    if verify {
-        println!("\nVerifying sorted output...");
-        verify_sorted_output(&output)?;
-    }
-
-    Ok(())
 }
 
 fn count_csv_records(input: &dyn SortInput) -> Result<usize, String> {
@@ -893,215 +994,5 @@ fn print_gensort_sample_records(output: &Box<dyn es::SortOutput>) {
                 Err(_) => println!("{:?}", key),
             }
         }
-    }
-}
-
-fn auto_detect_and_sort(
-    input: &Path,
-    run_gen_threads: usize,
-    merge_threads: usize,
-    memory_mb: usize,
-    temp_dir: &Path,
-    delimiter: char,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Auto-detecting file format for: {:?}", input);
-    
-    // First try to detect by extension
-    let extension = input.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|s| s.to_lowercase());
-    
-    match extension.as_deref() {
-        Some("csv") | Some("tbl") => {
-            // Try to detect CSV schema from filename
-            let filename = input.file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-            
-            let schema = if filename.contains("lineitem") {
-                CsvSchema::Lineitem
-            } else if filename.contains("yellow") && filename.contains("trip") {
-                CsvSchema::YellowTrip
-            } else {
-                // Try to auto-detect schema by reading first few lines
-                match detect_csv_schema(input, delimiter) {
-                    Ok(detected_schema) => detected_schema,
-                    Err(e) => {
-                        return Err(format!("Could not detect CSV schema: {}. Please use 'csv' subcommand with explicit --schema", e).into());
-                    }
-                }
-            };
-            
-            println!("Detected CSV file with schema: {:?}", schema);
-            sort_csv(
-                input,
-                schema,
-                run_gen_threads,
-                merge_threads,
-                memory_mb,
-                delimiter,
-                temp_dir,
-                false,  // benchmark
-                3,      // benchmark_runs
-                None,   // thread_counts
-                None,   // memory_sizes
-            )
-        }
-        Some("gensort") | Some("dat") => {
-            // Try to verify it's a GenSort file by checking if file size is multiple of 100
-            match std::fs::metadata(input) {
-                Ok(metadata) => {
-                    if metadata.len() % 100 == 0 {
-                        println!("Detected GenSort binary file");
-                        sort_gensort(
-                            input,
-                            run_gen_threads,
-                            merge_threads,
-                            memory_mb,
-                            temp_dir,
-                            false,  // verify
-                        )
-                    } else {
-                        Err(format!("File has .dat extension but size {} is not a multiple of 100 (GenSort record size)", metadata.len()).into())
-                    }
-                }
-                Err(e) => Err(format!("Could not read file metadata: {}", e).into()),
-            }
-        }
-        _ => {
-            // Try to detect by content
-            match detect_file_format(input) {
-                Ok(FileFormat::Csv) => {
-                    match detect_csv_schema(input, delimiter) {
-                        Ok(schema) => {
-                            println!("Detected CSV file with schema: {:?}", schema);
-                            sort_csv(
-                                input,
-                                schema,
-                                run_gen_threads,
-                                merge_threads,
-                                memory_mb,
-                                delimiter,
-                                temp_dir,
-                                false,  // benchmark
-                                3,      // benchmark_runs
-                                None,   // thread_counts
-                                None,   // memory_sizes
-                            )
-                        }
-                        Err(e) => Err(format!("Could not detect CSV schema: {}", e).into()),
-                    }
-                }
-                Ok(FileFormat::GenSort) => {
-                    println!("Detected GenSort binary file");
-                    sort_gensort(
-                        input,
-                        run_gen_threads,
-                        merge_threads,
-                        memory_mb,
-                        temp_dir,
-                        false,  // verify
-                    )
-                }
-                Err(e) => Err(format!("Could not detect file format: {}", e).into()),
-            }
-        }
-    }
-}
-
-enum FileFormat {
-    Csv,
-    GenSort,
-}
-
-fn detect_file_format(path: &Path) -> Result<FileFormat, String> {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    
-    // Check if file size is multiple of 100 (GenSort record size)
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| format!("Could not read file metadata: {}", e))?;
-    
-    if metadata.len() % 100 == 0 && metadata.len() > 0 {
-        // Could be GenSort, let's verify by reading a sample
-        let mut file = File::open(path)
-            .map_err(|e| format!("Could not open file: {}", e))?;
-        
-        let mut buffer = vec![0u8; 100.min(metadata.len() as usize)];
-        use std::io::Read;
-        file.read_exact(&mut buffer)
-            .map_err(|e| format!("Could not read file: {}", e))?;
-        
-        // GenSort files have 10-byte keys followed by 90-byte payloads
-        // Keys are typically ASCII or binary but structured
-        // If we see common CSV patterns, it's likely CSV
-        let as_string = String::from_utf8_lossy(&buffer);
-        if as_string.contains(',') || as_string.contains('|') || as_string.contains('\t') {
-            return Ok(FileFormat::Csv);
-        }
-        
-        // Likely GenSort
-        return Ok(FileFormat::GenSort);
-    }
-    
-    // Not a multiple of 100, check if it's CSV
-    let file = File::open(path)
-        .map_err(|e| format!("Could not open file: {}", e))?;
-    let reader = BufReader::new(file);
-    
-    // Read first line
-    let mut lines = reader.lines();
-    if let Some(Ok(first_line)) = lines.next() {
-        // Check for common delimiters
-        if first_line.contains(',') || first_line.contains('|') || first_line.contains('\t') {
-            return Ok(FileFormat::Csv);
-        }
-    }
-    
-    Err("Could not determine file format".to_string())
-}
-
-fn detect_csv_schema(path: &Path, delimiter: char) -> Result<CsvSchema, String> {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    
-    let file = File::open(path)
-        .map_err(|e| format!("Could not open file: {}", e))?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    
-    // Read first line (potential header)
-    let first_line = lines.next()
-        .ok_or("File is empty")?
-        .map_err(|e| format!("Could not read first line: {}", e))?;
-    
-    let fields: Vec<&str> = first_line.split(delimiter).collect();
-    
-    // Check for lineitem columns
-    let lineitem_cols = ["l_orderkey", "l_partkey", "l_suppkey", "l_linenumber", 
-                         "l_quantity", "l_extendedprice", "l_discount", "l_tax"];
-    let yellow_trip_cols = ["VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime",
-                            "passenger_count", "trip_distance", "RatecodeID"];
-    
-    // Count matches
-    let lineitem_matches = fields.iter()
-        .filter(|f| lineitem_cols.iter().any(|col| f.contains(col)))
-        .count();
-    let yellow_trip_matches = fields.iter()
-        .filter(|f| yellow_trip_cols.iter().any(|col| f.contains(col)))
-        .count();
-    
-    if lineitem_matches > yellow_trip_matches && lineitem_matches > 0 {
-        return Ok(CsvSchema::Lineitem);
-    } else if yellow_trip_matches > 0 {
-        return Ok(CsvSchema::YellowTrip);
-    }
-    
-    // Try to detect by number of fields
-    match fields.len() {
-        16 => Ok(CsvSchema::Lineitem),    // Lineitem has 16 columns
-        18 | 19 => Ok(CsvSchema::YellowTrip),  // Yellow trip varies by year
-        _ => Err(format!("Could not determine schema from {} fields", fields.len())),
     }
 }
