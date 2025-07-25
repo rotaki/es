@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 
 use crate::aligned_buffer::AlignedBuffer;
 use crate::constants::{align_up, DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT};
-use crate::global_file_manager::pwrite_fd;
+use crate::file::pwrite_fd;
 use crate::io_stats::IoStatsTracker;
 
 /// AlignedWriter that uses GlobalFileManager for file operations

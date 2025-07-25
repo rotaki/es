@@ -21,17 +21,18 @@ pub struct GenSortInputDirect {
 impl GenSortInputDirect {
     pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref().to_path_buf();
-        
+
         if !path.exists() {
             return Err(format!("File does not exist: {:?}", path));
         }
 
         let fd = open_file_with_direct_io(&path)
-            .map_err(|e| format!("Failed to open file {:?}: {}", path, e))?.into_raw_fd();
+            .map_err(|e| format!("Failed to open file {:?}: {}", path, e))?
+            .into_raw_fd();
 
         let file_size = file_size_fd(fd)
             .map_err(|e| format!("Failed to get file size for {:?}: {}", path, e))?;
-        
+
         // Verify file size is a multiple of record size
         if file_size % RECORD_SIZE as u64 != 0 {
             return Err(format!(
@@ -39,19 +40,16 @@ impl GenSortInputDirect {
                 file_size, RECORD_SIZE
             ));
         }
-        
+
         let num_records = (file_size / RECORD_SIZE as u64) as usize;
-        
-        Ok(Self {
-            fd,
-            num_records,
-        })
+
+        Ok(Self { fd, num_records })
     }
-    
+
     pub fn len(&self) -> usize {
         self.num_records
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.num_records == 0
     }
@@ -66,33 +64,30 @@ impl SortInput for GenSortInputDirect {
         if self.num_records == 0 {
             return vec![];
         }
-        
+
         let records_per_scanner = self.num_records.div_ceil(num_scanners);
         let mut scanners = Vec::new();
-        
+
         for scanner_id in 0..num_scanners {
             let start_record = scanner_id * records_per_scanner;
             if start_record >= self.num_records {
                 break;
             }
-            
+
             let end_record = ((scanner_id + 1) * records_per_scanner).min(self.num_records);
-            let scanner = GenSortScanner::new(
-                self.fd,
-                start_record,
-                end_record,
-                io_tracker.clone(),
-            );
-            
+            let scanner =
+                GenSortScanner::new(self.fd, start_record, end_record, io_tracker.clone());
+
             match scanner {
-                Ok(s) => scanners.push(Box::new(s) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>),
+                Ok(s) => scanners
+                    .push(Box::new(s) as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>),
                 Err(e) => {
                     eprintln!("Failed to create scanner {}: {}", scanner_id, e);
                     // Continue with other scanners
                 }
             }
         }
-        
+
         scanners
     }
 }
@@ -120,32 +115,35 @@ impl GenSortScanner {
             AlignedReader::from_raw_fd(fd)
                 .map_err(|e| format!("Failed to create aligned reader: {}", e))?
         };
-        
+
         // Seek to start position (must be aligned)
-        reader.seek((start_record * RECORD_SIZE) as u64)
+        reader
+            .seek((start_record * RECORD_SIZE) as u64)
             .map_err(|e| format!("Failed to seek: {}", e))?;
-        
+
         Ok(Self {
             reader,
             current_record: start_record,
             end_record,
         })
     }
-    
+
     fn read_record(&mut self) -> Option<(Vec<u8>, Vec<u8>)> {
         if self.current_record >= self.end_record {
             return None;
         }
-        
+
         let mut key = vec![0u8; KEY_SIZE];
         let mut payload = vec![0u8; PAYLOAD_SIZE];
 
         // Read the next record into the buffer if needed
 
-        self.reader.read_exact(&mut key)
+        self.reader
+            .read_exact(&mut key)
             .map_err(|e| eprintln!("Failed to read key: {}", e))
             .ok()?;
-        self.reader.read_exact(&mut payload)
+        self.reader
+            .read_exact(&mut payload)
             .map_err(|e| eprintln!("Failed to read payload: {}", e))
             .ok()?;
 
@@ -157,7 +155,7 @@ impl GenSortScanner {
 
 impl Iterator for GenSortScanner {
     type Item = (Vec<u8>, Vec<u8>);
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         self.read_record()
     }

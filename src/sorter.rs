@@ -1,14 +1,17 @@
-use std::path::PathBuf;
+use std::os::fd::IntoRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
 use crate::aligned_writer::AlignedWriter;
-use crate::global_file_manager::GlobalFileManager;
+use crate::constants::open_file_with_direct_io;
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;
-use crate::{IoStatsTracker, Run, RunInfo, SortBuffer, SortInput, SortOutput, SortStats, Sorter, IoStats};
+use crate::{
+    IoStats, IoStatsTracker, Run, RunInfo, SortBuffer, SortInput, SortOutput, SortStats, Sorter,
+};
 
 /// Statistics from the run generation phase
 #[derive(Clone, Debug)]
@@ -129,8 +132,8 @@ impl SortOutput for Output {
 
 // Output implementation that chains run iterators without materializing
 pub struct RunsOutput {
-    runs: Vec<RunImpl>,
-    stats: SortStats,
+    pub runs: Vec<RunImpl>,
+    pub stats: SortStats,
 }
 
 impl SortOutput for RunsOutput {
@@ -176,8 +179,23 @@ impl Iterator for ChainedIterator {
 
 // Shared directory info for cleanup coordination
 pub struct TempDirInfo {
-    pub path: PathBuf,
-    pub should_delete: bool,
+    path: PathBuf,
+    should_delete: bool,
+}
+
+impl TempDirInfo {
+    /// Create a new TempDirInfo with the specified path
+    pub fn new(path: impl AsRef<Path>, should_delete: bool) -> Self {
+        // Create the directory if it doesn't exist
+        let path = path.as_ref().to_path_buf();
+        if !path.exists() {
+            std::fs::create_dir_all(&path).expect("Failed to create temp directory");
+        }
+        Self {
+            path,
+            should_delete,
+        }
+    }
 }
 
 impl Drop for TempDirInfo {
@@ -188,13 +206,18 @@ impl Drop for TempDirInfo {
     }
 }
 
+impl AsRef<Path> for TempDirInfo {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 // External sorter following sorter.rs pattern
 pub struct ExternalSorter {
     run_gen_threads: usize,
     merge_threads: usize,
     max_memory: usize,
     temp_dir_info: Arc<TempDirInfo>,
-    file_manager: Arc<GlobalFileManager>,
 }
 
 impl ExternalSorter {
@@ -242,7 +265,6 @@ impl ExternalSorter {
                 path: temp_dir,
                 should_delete: true,
             }),
-            file_manager: Arc::new(GlobalFileManager::new()), // 512-byte alignment for Direct I/O
         }
     }
 
@@ -250,8 +272,7 @@ impl ExternalSorter {
         sort_input: Box<dyn SortInput>,
         num_threads: usize,
         per_thread_mem: usize,
-        file_manager: Arc<GlobalFileManager>,
-        temp_dir_info: Arc<TempDirInfo>,
+        dir: impl AsRef<Path>,
     ) -> Result<(Vec<RunImpl>, RunGenerationStats), String> {
         // Start timing for run generation
         let run_generation_start = Instant::now();
@@ -269,30 +290,32 @@ impl ExternalSorter {
         );
 
         if scanners.is_empty() {
-            return Ok((vec![], RunGenerationStats {
-                num_runs: 0,
-                runs_info: vec![],
-                time_ms: 0,
-                io_stats: None,
-            }));
+            return Ok((
+                vec![],
+                RunGenerationStats {
+                    num_runs: 0,
+                    runs_info: vec![],
+                    time_ms: 0,
+                    io_stats: None,
+                },
+            ));
         }
 
         // Run Generation Phase (following sorter.rs pattern)
         let mut handles = vec![];
 
         for (thread_id, scanner) in scanners.into_iter().enumerate() {
-            let temp_dir = Arc::clone(&temp_dir_info).path.clone();
             let io_tracker = Arc::clone(&run_generation_io_tracker);
-            let file_manager = Arc::clone(&file_manager);
+            let dir = dir.as_ref().to_path_buf();
 
             let handle = thread::spawn(move || {
                 let mut local_runs = Vec::new();
                 let mut sort_buffer = SortBufferImpl::new(per_thread_mem);
 
-                let run_path = temp_dir.join(format!("intermediate_{}.dat", thread_id));
-                let fd = file_manager
-                    .get_or_open_file(&run_path)
-                    .expect("Failed to open run file");
+                let run_path = dir.join(format!("intermediate_{}.dat", thread_id));
+                let fd = open_file_with_direct_io(&run_path)
+                    .expect("Failed to open run file with direct IO")
+                    .into_raw_fd();
                 let mut run_writer = Option::Some(
                     AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
                         .expect("Failed to create run writer"),
@@ -349,9 +372,6 @@ impl ExternalSorter {
             handles.push(handle);
         }
 
-        // Keep a reference to temp_dir_info to prevent premature cleanup
-        let _temp_dir_ref = Arc::clone(&temp_dir_info);
-
         // Collect runs from all threads
         let mut output_runs = Vec::new();
         for handle in handles {
@@ -394,61 +414,28 @@ impl ExternalSorter {
 
     pub fn merge(
         output_runs: Vec<RunImpl>,
-        run_gen_stats: RunGenerationStats,
         num_threads: usize,
-        file_manager: Arc<GlobalFileManager>,
-        temp_dir_info: Arc<TempDirInfo>,
-    ) -> Result<(Box<dyn SortOutput>, MergeStats), String> {
-        // Extract run generation stats
-        let initial_runs_count = run_gen_stats.num_runs;
-        let initial_runs_info = run_gen_stats.runs_info;
-        let run_generation_time_ms = run_gen_stats.time_ms;
-        let run_generation_io_stats = run_gen_stats.io_stats;
-
+        dir: impl AsRef<Path>,
+    ) -> Result<(Vec<RunImpl>, MergeStats), String> {
         // If no runs or single run, return early
         if output_runs.is_empty() {
-            let stats = SortStats {
-                num_runs: 0,
-                runs_info: initial_runs_info.clone(),
-                run_generation_time_ms: Some(run_generation_time_ms),
-                merge_entry_num: vec![],
-                merge_time_ms: None,
-                run_generation_io_stats: run_generation_io_stats.clone(),
-                merge_io_stats: None,
-            };
             let merge_stats = MergeStats {
                 output_runs: 0,
                 merge_entry_num: vec![],
                 time_ms: 0,
                 io_stats: None,
             };
-            return Ok((Box::new(RunsOutput {
-                runs: vec![],
-                stats,
-            }), merge_stats));
+            return Ok((vec![], merge_stats));
         }
 
         if output_runs.len() == 1 {
-            let stats = SortStats {
-                num_runs: initial_runs_count,
-                runs_info: initial_runs_info.clone(),
-                run_generation_time_ms: Some(run_generation_time_ms),
-                merge_entry_num: vec![],
-                merge_time_ms: None,
-                run_generation_io_stats: run_generation_io_stats.clone(),
-                merge_io_stats: None,
-            };
             let merge_stats = MergeStats {
                 output_runs: 1,
-                merge_entry_num: vec![],
+                merge_entry_num: vec![output_runs[0].total_entries() as u64],
                 time_ms: 0,
                 io_stats: None,
             };
-
-            return Ok((Box::new(RunsOutput {
-                runs: output_runs,
-                stats,
-            }), merge_stats));
+            return Ok((output_runs, merge_stats));
         }
 
         // Start timing for merge phase
@@ -481,11 +468,10 @@ impl ExternalSorter {
 
         // Create merge tasks
         let mut merge_handles = vec![];
-        let temp_dir = Arc::clone(&temp_dir_info).path.clone();
 
         for thread_id in 0..merge_threads {
             let runs = Arc::clone(&runs_arc);
-            let temp_dir = temp_dir.clone();
+            let dir = dir.as_ref().to_path_buf();
             let io_tracker = Arc::clone(&merge_io_tracker);
             // Determine the key range for this thread
             let lower_bound = if thread_id == 0 {
@@ -500,7 +486,6 @@ impl ExternalSorter {
                 vec![]
             };
 
-            let file_manager = Arc::clone(&file_manager);
             let handle = thread::spawn(move || {
                 // Create iterators for this key range from all runs
                 let iterators: Vec<_> = runs
@@ -515,10 +500,10 @@ impl ExternalSorter {
                     .collect();
 
                 // Create output run for this thread
-                let run_path = temp_dir.join(format!("merge_output_{}.dat", thread_id));
-                let fd = file_manager
-                    .get_or_open_file(&run_path)
-                    .expect("Failed to open run file");
+                let run_path = dir.join(format!("merge_output_{}.dat", thread_id));
+                let fd = open_file_with_direct_io(&run_path)
+                    .expect("Failed to open run file with direct IO")
+                    .into_raw_fd();
                 let writer =
                     AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
                         .expect("Failed to create run writer");
@@ -564,16 +549,6 @@ impl ExternalSorter {
             .map(|run| run.total_entries() as u64)
             .collect();
 
-        let stats = SortStats {
-            num_runs: initial_runs_count,
-            runs_info: initial_runs_info,
-            run_generation_time_ms: Some(run_generation_time_ms),
-            merge_entry_num: merge_entry_num.clone(),
-            merge_time_ms: Some(merge_time_ms),
-            run_generation_io_stats,
-            merge_io_stats: merge_io_stats.clone(),
-        };
-
         let merge_stats = MergeStats {
             output_runs: output_runs.len(),
             merge_entry_num,
@@ -581,10 +556,7 @@ impl ExternalSorter {
             io_stats: merge_io_stats,
         };
 
-        Ok((Box::new(RunsOutput {
-            runs: output_runs,
-            stats,
-        }), merge_stats))
+        Ok((output_runs, merge_stats))
     }
 }
 
@@ -593,22 +565,31 @@ impl Sorter for ExternalSorter {
     fn sort(&mut self, sort_input: Box<dyn SortInput>) -> Result<Box<dyn SortOutput>, String> {
         // Run generation phase
         let (runs, run_gen_stats) = ExternalSorter::run_generation(
-            sort_input, 
-            self.run_gen_threads, 
-            self.max_memory / self.run_gen_threads, 
-            Arc::clone(&self.file_manager), 
-            Arc::clone(&self.temp_dir_info)
+            sort_input,
+            self.run_gen_threads,
+            self.max_memory / self.run_gen_threads,
+            self.temp_dir_info.as_ref(),
         )?;
 
         // Merge phase
-        let (output, _merge_stats) = ExternalSorter::merge(
-            runs, 
-            run_gen_stats, 
-            self.merge_threads, 
-            Arc::clone(&self.file_manager), 
-            Arc::clone(&self.temp_dir_info)
-        )?;
-        
-        Ok(output)
+        let (merged_runs, merge_stats) =
+            ExternalSorter::merge(runs, self.merge_threads, self.temp_dir_info.as_ref())?;
+
+        // Combine stats
+        let sort_stats = SortStats {
+            num_runs: run_gen_stats.num_runs,
+            runs_info: run_gen_stats.runs_info,
+            run_generation_time_ms: Some(run_gen_stats.time_ms),
+            merge_entry_num: merge_stats.merge_entry_num,
+            merge_time_ms: Some(merge_stats.time_ms),
+            run_generation_io_stats: run_gen_stats.io_stats,
+            merge_io_stats: merge_stats.io_stats,
+        };
+
+        // Create output
+        Ok(Box::new(RunsOutput {
+            runs: merged_runs,
+            stats: sort_stats,
+        }))
     }
 }

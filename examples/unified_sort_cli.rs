@@ -1,9 +1,9 @@
+use arrow::datatypes::{DataType, Field, Schema};
 use clap::{Parser, Subcommand, ValueEnum};
 use es::{
-    CsvDirectConfig, CsvInputDirect, ExternalSorter, GenSortInputDirect, Sorter, SortInput,
-    order_preserving_encoding::decode_bytes,
+    order_preserving_encoding::decode_bytes, CsvDirectConfig, CsvInputDirect, ExternalSorter,
+    GenSortInputDirect, SortInput, Sorter,
 };
-use arrow::datatypes::{DataType, Field, Schema};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,7 +55,6 @@ enum Commands {
         /// Directory for temporary files
         #[arg(short = 't', long, default_value = ".")]
         temp_dir: PathBuf,
-
 
         /// Number of benchmark runs per configuration
         #[arg(long, default_value = "1")]
@@ -158,49 +157,55 @@ struct BenchmarkResult {
     merge_write_mb: f64,
 }
 
-fn lineitem_schema(key_columns: Vec<usize>, value_columns: Vec<usize>) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
+fn lineitem_schema(
+    key_columns: Vec<usize>,
+    value_columns: Vec<usize>,
+) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
     let schema = Arc::new(Schema::new(vec![
-        Field::new("l_orderkey", DataType::Int64, false),       // 0
-        Field::new("l_partkey", DataType::Int64, false),        // 1
-        Field::new("l_suppkey", DataType::Int64, false),        // 2
-        Field::new("l_linenumber", DataType::Int32, false),     // 3
-        Field::new("l_quantity", DataType::Float64, false),     // 4
-        Field::new("l_extendedprice", DataType::Float64, false),// 5
-        Field::new("l_discount", DataType::Float64, false),     // 6
-        Field::new("l_tax", DataType::Float64, false),         // 7
-        Field::new("l_returnflag", DataType::Utf8, false),      // 8
-        Field::new("l_linestatus", DataType::Utf8, false),      // 9
-        Field::new("l_shipdate", DataType::Date32, false),      // 10
-        Field::new("l_commitdate", DataType::Date32, false),    // 11
-        Field::new("l_receiptdate", DataType::Date32, false),   // 12
-        Field::new("l_shipinstruct", DataType::Utf8, false),    // 13
-        Field::new("l_shipmode", DataType::Utf8, false),        // 14
-        Field::new("l_comment", DataType::Utf8, false),         // 15
+        Field::new("l_orderkey", DataType::Int64, false), // 0
+        Field::new("l_partkey", DataType::Int64, false),  // 1
+        Field::new("l_suppkey", DataType::Int64, false),  // 2
+        Field::new("l_linenumber", DataType::Int32, false), // 3
+        Field::new("l_quantity", DataType::Float64, false), // 4
+        Field::new("l_extendedprice", DataType::Float64, false), // 5
+        Field::new("l_discount", DataType::Float64, false), // 6
+        Field::new("l_tax", DataType::Float64, false),    // 7
+        Field::new("l_returnflag", DataType::Utf8, false), // 8
+        Field::new("l_linestatus", DataType::Utf8, false), // 9
+        Field::new("l_shipdate", DataType::Date32, false), // 10
+        Field::new("l_commitdate", DataType::Date32, false), // 11
+        Field::new("l_receiptdate", DataType::Date32, false), // 12
+        Field::new("l_shipinstruct", DataType::Utf8, false), // 13
+        Field::new("l_shipmode", DataType::Utf8, false),  // 14
+        Field::new("l_comment", DataType::Utf8, false),   // 15
     ]));
     (schema, key_columns, value_columns)
 }
 
-fn yellow_taxi_schema(key_columns: Vec<usize>, value_columns: Vec<usize>) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
+fn yellow_taxi_schema(
+    key_columns: Vec<usize>,
+    value_columns: Vec<usize>,
+) -> (Arc<Schema>, Vec<usize>, Vec<usize>) {
     let schema = Arc::new(Schema::new(vec![
-        Field::new("vendorid", DataType::Int64, true),                // 0
-        Field::new("tpep_pickup_datetime", DataType::Utf8, true),     // 1
-        Field::new("tpep_dropoff_datetime", DataType::Utf8, true),    // 2
-        Field::new("passenger_count", DataType::Int64, true),         // 3
-        Field::new("trip_distance", DataType::Float64, true),         // 4
-        Field::new("ratecodeid", DataType::Int64, true),             // 5
-        Field::new("store_and_fwd_flag", DataType::Utf8, true),      // 6
-        Field::new("pulocationid", DataType::Int64, true),           // 7
-        Field::new("dolocationid", DataType::Int64, true),           // 8
-        Field::new("payment_type", DataType::Int64, true),           // 9
-        Field::new("fare_amount", DataType::Float64, true),          // 10
-        Field::new("extra", DataType::Float64, true),                // 11
-        Field::new("mta_tax", DataType::Float64, true),              // 12
-        Field::new("tip_amount", DataType::Float64, true),           // 13
-        Field::new("tolls_amount", DataType::Float64, true),         // 14
-        Field::new("improvement_surcharge", DataType::Float64, true),// 15
-        Field::new("total_amount", DataType::Float64, true),         // 16
+        Field::new("vendorid", DataType::Int64, true), // 0
+        Field::new("tpep_pickup_datetime", DataType::Utf8, true), // 1
+        Field::new("tpep_dropoff_datetime", DataType::Utf8, true), // 2
+        Field::new("passenger_count", DataType::Int64, true), // 3
+        Field::new("trip_distance", DataType::Float64, true), // 4
+        Field::new("ratecodeid", DataType::Int64, true), // 5
+        Field::new("store_and_fwd_flag", DataType::Utf8, true), // 6
+        Field::new("pulocationid", DataType::Int64, true), // 7
+        Field::new("dolocationid", DataType::Int64, true), // 8
+        Field::new("payment_type", DataType::Int64, true), // 9
+        Field::new("fare_amount", DataType::Float64, true), // 10
+        Field::new("extra", DataType::Float64, true),  // 11
+        Field::new("mta_tax", DataType::Float64, true), // 12
+        Field::new("tip_amount", DataType::Float64, true), // 13
+        Field::new("tolls_amount", DataType::Float64, true), // 14
+        Field::new("improvement_surcharge", DataType::Float64, true), // 15
+        Field::new("total_amount", DataType::Float64, true), // 16
         Field::new("congestion_surcharge", DataType::Float64, true), // 17
-        Field::new("airport_fee", DataType::Float64, true),          // 18
+        Field::new("airport_fee", DataType::Float64, true), // 18
     ]));
     (schema, key_columns, value_columns)
 }
@@ -286,23 +291,23 @@ fn sort_csv(
     println!("Merge threads: {}", merge_threads);
     println!("Memory limit: {} MB", memory_mb);
     println!("Delimiter: '{}'", delimiter);
-    
+
     // Use provided key/payload columns or defaults (key=0, payload=1)
     let key_cols = key_columns.unwrap_or_else(|| vec![0]);
     let value_cols = payload_columns.unwrap_or_else(|| vec![1]);
-    
+
     println!("Key columns: {:?}", key_cols);
     println!("Payload columns: {:?}", value_cols);
-    
+
     // Create schema and configure based on type
     let (arrow_schema, final_key_columns, final_value_columns) = match schema {
         CsvSchema::Lineitem => {
             println!("Using lineitem schema");
-            lineitem_schema(key_cols, value_cols)
+            lineitem_schema(key_cols.clone(), value_cols.clone())
         }
         CsvSchema::YellowTrip => {
             println!("Using yellow trip schema");
-            yellow_taxi_schema(key_cols, value_cols)
+            yellow_taxi_schema(key_cols.clone(), value_cols.clone())
         }
     };
 
@@ -315,7 +320,7 @@ fn sort_csv(
     // Use provided thread counts and memory sizes, or defaults
     let threads = thread_counts.unwrap_or_else(|| vec![run_gen_threads]);
     let mem_sizes = memory_sizes.unwrap_or_else(|| vec![format!("{}MB", memory_mb)]);
-        
+
     run_comprehensive_benchmark(
         input,
         schema,
@@ -347,7 +352,10 @@ fn run_comprehensive_benchmark(
             let s = s.trim();
             let (num, unit) = if s.to_uppercase().ends_with("GB") {
                 let num_str = s[..s.len() - 2].trim();
-                (num_str.parse::<f64>().unwrap_or(1.0) * 1024.0, s.to_string())
+                (
+                    num_str.parse::<f64>().unwrap_or(1.0) * 1024.0,
+                    s.to_string(),
+                )
             } else if s.to_uppercase().ends_with("MB") {
                 let num_str = s[..s.len() - 2].trim();
                 (num_str.parse::<f64>().unwrap_or(1024.0), s.to_string())
@@ -363,12 +371,8 @@ fn run_comprehensive_benchmark(
 
     // Get one record count for display
     let (arrow_schema, final_key_columns, final_value_columns) = match schema {
-        CsvSchema::Lineitem => {
-            lineitem_schema(key_columns.clone(), value_columns.clone())
-        }
-        CsvSchema::YellowTrip => {
-            yellow_taxi_schema(key_columns.clone(), value_columns.clone())
-        }
+        CsvSchema::Lineitem => lineitem_schema(key_columns.clone(), value_columns.clone()),
+        CsvSchema::YellowTrip => yellow_taxi_schema(key_columns.clone(), value_columns.clone()),
     };
 
     let mut test_config = CsvDirectConfig::new(arrow_schema.clone());
@@ -376,7 +380,7 @@ fn run_comprehensive_benchmark(
     test_config.key_columns = final_key_columns.clone();
     test_config.value_columns = final_value_columns.clone();
     test_config.has_headers = true;
-    
+
     let test_input = CsvInputDirect::new(input, test_config)?;
     let total_entries = count_csv_records(&test_input)?;
 
@@ -392,21 +396,21 @@ fn run_comprehensive_benchmark(
     for &threads in thread_counts {
         for (memory_mb, memory_str) in &memory_configs {
             println!("Testing {} threads, {} memory...", threads, memory_str);
-            
+
             let mut accumulated_stats = RunStats::default();
             let mut valid_runs = 0;
 
             for run in 1..=num_runs {
                 print!("  Run {}/{}: ", run, num_runs);
-                
+
                 let mut config = CsvDirectConfig::new(arrow_schema.clone());
                 config.delimiter = delimiter as u8;
                 config.key_columns = final_key_columns.clone();
                 config.value_columns = final_value_columns.clone();
                 config.has_headers = true;
-                
+
                 let csv_input = CsvInputDirect::new(input, config)?;
-                
+
                 let mut sorter = ExternalSorter::new_with_threads_and_dir(
                     threads,
                     threads,
@@ -422,7 +426,7 @@ fn run_comprehensive_benchmark(
                 // Accumulate stats instead of pushing to vectors
                 accumulated_stats.total_time += elapsed.as_secs_f64();
                 accumulated_stats.runs_count += stats.num_runs;
-                
+
                 if let Some(rg_time) = stats.run_generation_time_ms {
                     accumulated_stats.run_gen_time += rg_time as f64 / 1000.0;
                 }
@@ -492,7 +496,7 @@ fn run_comprehensive_benchmark(
 
     // Print summary table
     print_benchmark_summary(&all_results);
-    
+
     Ok(())
 }
 
@@ -517,7 +521,7 @@ fn sort_gensort(
     // Use provided thread counts and memory sizes, or defaults
     let threads = thread_counts.unwrap_or_else(|| vec![run_gen_threads]);
     let mem_sizes = memory_sizes.unwrap_or_else(|| vec![format!("{}MB", memory_mb)]);
-        
+
     run_gensort_benchmark(
         input,
         &threads,
@@ -543,7 +547,10 @@ fn run_gensort_benchmark(
             let s = s.trim();
             let (num, unit) = if s.to_uppercase().ends_with("GB") {
                 let num_str = s[..s.len() - 2].trim();
-                (num_str.parse::<f64>().unwrap_or(1.0) * 1024.0, s.to_string())
+                (
+                    num_str.parse::<f64>().unwrap_or(1.0) * 1024.0,
+                    s.to_string(),
+                )
             } else if s.to_uppercase().ends_with("MB") {
                 let num_str = s[..s.len() - 2].trim();
                 (num_str.parse::<f64>().unwrap_or(1024.0), s.to_string())
@@ -574,15 +581,15 @@ fn run_gensort_benchmark(
     for &threads in thread_counts {
         for (memory_mb, memory_str) in &memory_configs {
             println!("Testing {} threads, {} memory...", threads, memory_str);
-            
+
             let mut accumulated_stats = RunStats::default();
             let mut valid_runs = 0;
 
             for run in 1..=num_runs {
                 print!("  Run {}/{}: ", run, num_runs);
-                
+
                 let gensort_input = GenSortInputDirect::new(input)?;
-                
+
                 let mut sorter = ExternalSorter::new_with_threads_and_dir(
                     threads,
                     threads,
@@ -598,7 +605,7 @@ fn run_gensort_benchmark(
                 // Accumulate stats
                 accumulated_stats.total_time += elapsed.as_secs_f64();
                 accumulated_stats.runs_count += stats.num_runs;
-                
+
                 if let Some(rg_time) = stats.run_generation_time_ms {
                     accumulated_stats.run_gen_time += rg_time as f64 / 1000.0;
                 }
@@ -675,7 +682,7 @@ fn run_gensort_benchmark(
 
     // Print summary table
     print_benchmark_summary(&all_results);
-    
+
     Ok(())
 }
 
@@ -683,15 +690,28 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
     println!("\n{}", "=".repeat(120));
     println!("Benchmark Results Summary");
     println!("{}", "=".repeat(120));
-    println!("{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
-        "Threads", "Memory", "Runs", "Total (s)", "RunGen (s)", "Merge (s)", 
-        "Entries", "Throughput", "Read MB", "Write MB");
-    println!("{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
-        "", "", "", "", "", "", "", "(M entries/s)", "", "");
+    println!(
+        "{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
+        "Threads",
+        "Memory",
+        "Runs",
+        "Total (s)",
+        "RunGen (s)",
+        "Merge (s)",
+        "Entries",
+        "Throughput",
+        "Read MB",
+        "Write MB"
+    );
+    println!(
+        "{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
+        "", "", "", "", "", "", "", "(M entries/s)", "", ""
+    );
     println!("{}", "-".repeat(120));
 
     for result in results {
-        println!("{:<8} {:<12} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
+        println!(
+            "{:<8} {:<12} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
             result.threads,
             result.memory_str,
             result.runs,
@@ -709,19 +729,29 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
     // Print detailed I/O statistics
     println!("\nDetailed I/O Statistics Summary:");
     println!("{}", "-".repeat(100));
-    println!("{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
-        "Threads", "Memory", "Run Gen Reads", "Run Gen Writes", 
-        "Merge Reads", "Merge Writes");
-    println!("{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
-        "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)");
+    println!(
+        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
+        "Threads", "Memory", "Run Gen Reads", "Run Gen Writes", "Merge Reads", "Merge Writes"
+    );
+    println!(
+        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
+        "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)"
+    );
     println!("{}", "-".repeat(100));
 
     for result in results {
-        println!("{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
+        println!(
+            "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
             result.threads,
             result.memory_str,
-            format!("{} / {:.1}", result.run_gen_read_ops, result.run_gen_read_mb),
-            format!("{} / {:.1}", result.run_gen_write_ops, result.run_gen_write_mb),
+            format!(
+                "{} / {:.1}",
+                result.run_gen_read_ops, result.run_gen_read_mb
+            ),
+            format!(
+                "{} / {:.1}",
+                result.run_gen_write_ops, result.run_gen_write_mb
+            ),
             format!("{} / {:.1}", result.merge_read_ops, result.merge_read_mb),
             format!("{} / {:.1}", result.merge_write_ops, result.merge_write_mb),
         );
@@ -746,7 +776,7 @@ fn print_sort_results(
     output: &Box<dyn es::SortOutput>,
 ) {
     println!("\nSort completed in {:.2} seconds", elapsed.as_secs_f64());
-    
+
     let stats = output.stats();
     println!("\nSort Statistics:");
     println!("  Number of runs: {}", stats.num_runs);
@@ -756,25 +786,43 @@ fn print_sort_results(
     if let Some(merge_time) = stats.merge_time_ms {
         println!("  Merge time: {} ms", merge_time);
     }
-    
+
     let throughput_meps = record_count as f64 / elapsed.as_secs_f64() / 1_000_000.0;
     println!("  Throughput: {:.2} M entries/s", throughput_meps);
-    
+
     // Print I/O statistics if available
     if let Some(ref io_stats) = stats.run_generation_io_stats {
         println!("\nRun Generation I/O:");
-        println!("  Reads: {} ops, {:.2} MB", io_stats.read_ops, io_stats.read_bytes as f64 / 1_000_000.0);
-        println!("  Writes: {} ops, {:.2} MB", io_stats.write_ops, io_stats.write_bytes as f64 / 1_000_000.0);
+        println!(
+            "  Reads: {} ops, {:.2} MB",
+            io_stats.read_ops,
+            io_stats.read_bytes as f64 / 1_000_000.0
+        );
+        println!(
+            "  Writes: {} ops, {:.2} MB",
+            io_stats.write_ops,
+            io_stats.write_bytes as f64 / 1_000_000.0
+        );
     }
-    
+
     if let Some(ref io_stats) = stats.merge_io_stats {
         println!("\nMerge Phase I/O:");
-        println!("  Reads: {} ops, {:.2} MB", io_stats.read_ops, io_stats.read_bytes as f64 / 1_000_000.0);
-        println!("  Writes: {} ops, {:.2} MB", io_stats.write_ops, io_stats.write_bytes as f64 / 1_000_000.0);
+        println!(
+            "  Reads: {} ops, {:.2} MB",
+            io_stats.read_ops,
+            io_stats.read_bytes as f64 / 1_000_000.0
+        );
+        println!(
+            "  Writes: {} ops, {:.2} MB",
+            io_stats.write_ops,
+            io_stats.write_bytes as f64 / 1_000_000.0
+        );
     }
 }
 
-fn verify_sorted_output(output: &Box<dyn es::SortOutput>) -> Result<(), Box<dyn std::error::Error>> {
+fn verify_sorted_output(
+    output: &Box<dyn es::SortOutput>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut prev_key: Option<Vec<u8>> = None;
     let mut count = 0;
 
@@ -803,7 +851,7 @@ fn print_sample_records(
 ) {
     let mut first_records = Vec::new();
     let mut all_records = Vec::new();
-    
+
     // Collect all records to get first and last
     for (key, value) in output.iter() {
         if first_records.len() < 5 {
@@ -811,42 +859,82 @@ fn print_sample_records(
         }
         all_records.push((key, value));
     }
-    
+
     let total = all_records.len();
     if total == 0 {
         return;
     }
-    
+
     // Get column names based on schema
     let column_names = match schema {
         CsvSchema::Lineitem => vec![
-            "l_orderkey", "l_partkey", "l_suppkey", "l_linenumber",
-            "l_quantity", "l_extendedprice", "l_discount", "l_tax",
-            "l_returnflag", "l_linestatus", "l_shipdate", "l_commitdate",
-            "l_receiptdate", "l_shipinstruct", "l_shipmode", "l_comment"
+            "l_orderkey",
+            "l_partkey",
+            "l_suppkey",
+            "l_linenumber",
+            "l_quantity",
+            "l_extendedprice",
+            "l_discount",
+            "l_tax",
+            "l_returnflag",
+            "l_linestatus",
+            "l_shipdate",
+            "l_commitdate",
+            "l_receiptdate",
+            "l_shipinstruct",
+            "l_shipmode",
+            "l_comment",
         ],
         CsvSchema::YellowTrip => vec![
-            "vendorid", "tpep_pickup_datetime", "tpep_dropoff_datetime",
-            "passenger_count", "trip_distance", "ratecodeid", "store_and_fwd_flag",
-            "pulocationid", "dolocationid", "payment_type", "fare_amount",
-            "extra", "mta_tax", "tip_amount", "tolls_amount",
-            "improvement_surcharge", "total_amount", "congestion_surcharge", "airport_fee"
+            "vendorid",
+            "tpep_pickup_datetime",
+            "tpep_dropoff_datetime",
+            "passenger_count",
+            "trip_distance",
+            "ratecodeid",
+            "store_and_fwd_flag",
+            "pulocationid",
+            "dolocationid",
+            "payment_type",
+            "fare_amount",
+            "extra",
+            "mta_tax",
+            "tip_amount",
+            "tolls_amount",
+            "improvement_surcharge",
+            "total_amount",
+            "congestion_surcharge",
+            "airport_fee",
         ],
     };
-    
+
     println!("\nFirst 5 records:");
     for (i, (key, value)) in first_records.iter().enumerate() {
         print!("  Record {}: ", i);
-        print_csv_key_value(key, value, key_columns, value_columns, &column_names, schema);
+        print_csv_key_value(
+            key,
+            value,
+            key_columns,
+            value_columns,
+            &column_names,
+            schema,
+        );
     }
-    
+
     if total > 5 {
         println!("\nLast 5 records:");
         let start_idx = total.saturating_sub(5);
         for i in start_idx..total {
             print!("  Record {}: ", i);
             let (key, value) = &all_records[i];
-            print_csv_key_value(key, value, key_columns, value_columns, &column_names, schema);
+            print_csv_key_value(
+                key,
+                value,
+                key_columns,
+                value_columns,
+                &column_names,
+                schema,
+            );
         }
     }
 }
@@ -866,24 +954,24 @@ fn print_csv_key_value(
         if offset >= key.len() {
             break;
         }
-        
+
         // Determine the data type based on schema and column index
         let field_type = match schema {
             CsvSchema::Lineitem => match col_idx {
-                0..=2 => "Int64",         // orderkey, partkey, suppkey
-                3 => "Int32",             // linenumber
-                4..=7 => "Float64",       // quantity, extendedprice, discount, tax
-                10..=12 => "Date32",      // shipdate, commitdate, receiptdate
-                _ => "Utf8",              // strings
+                0..=2 => "Int64",    // orderkey, partkey, suppkey
+                3 => "Int32",        // linenumber
+                4..=7 => "Float64",  // quantity, extendedprice, discount, tax
+                10..=12 => "Date32", // shipdate, commitdate, receiptdate
+                _ => "Utf8",         // strings
             },
             CsvSchema::YellowTrip => match col_idx {
-                0 | 3 | 5 | 7..=9 => "Int64",  // vendorid, passenger_count, ratecodeid, location ids, payment_type
-                4 | 10..=18 => "Float64",       // trip_distance, fare amounts
-                1 | 2 => "Utf8",                // datetime strings
-                _ => "Utf8",                    // other strings
+                0 | 3 | 5 | 7..=9 => "Int64", // vendorid, passenger_count, ratecodeid, location ids, payment_type
+                4 | 10..=18 => "Float64",     // trip_distance, fare amounts
+                1 | 2 => "Utf8",              // datetime strings
+                _ => "Utf8",                  // other strings
             },
         };
-        
+
         // Get expected size
         let expected_size = match field_type {
             "Int64" => 8,
@@ -892,23 +980,23 @@ fn print_csv_key_value(
             "Date32" => 4,
             _ => 0, // Variable length
         };
-        
+
         if expected_size > 0 {
             let field_end = offset + expected_size;
             if field_end > key.len() {
                 break;
             }
-            
+
             let field_bytes = &key[offset..field_end];
             let decoded = decode_bytes(field_bytes, field_type)
                 .unwrap_or_else(|_| format!("<{} bytes>", field_bytes.len()));
-            
+
             if col_idx < column_names.len() {
                 print!("{}={}", column_names[col_idx], decoded);
             } else {
                 print!("col{}={}", col_idx, decoded);
             }
-            
+
             offset = field_end;
             // Skip null terminator if present
             if offset < key.len() && key[offset] == 0 {
@@ -921,27 +1009,27 @@ fn print_csv_key_value(
                 .position(|&b| b == 0)
                 .map(|pos| offset + pos)
                 .unwrap_or(key.len());
-            
+
             let field_bytes = &key[offset..field_end];
             let decoded = String::from_utf8_lossy(field_bytes);
-            
+
             if col_idx < column_names.len() {
                 print!("{}={}", column_names[col_idx], decoded);
             } else {
                 print!("col{}={}", col_idx, decoded);
             }
-            
+
             offset = field_end;
             if offset < key.len() && key[offset] == 0 {
                 offset += 1;
             }
         }
-        
+
         if i < key_columns.len() - 1 {
             print!(", ");
         }
     }
-    
+
     print!(" | Value: ");
     if value_columns.is_empty() {
         print!("<empty>");
@@ -960,7 +1048,7 @@ fn print_csv_key_value(
 fn print_gensort_sample_records(output: &Box<dyn es::SortOutput>) {
     let mut first_records = Vec::new();
     let mut all_records = Vec::new();
-    
+
     // Collect records
     for (key, payload) in output.iter() {
         if first_records.len() < 5 {
@@ -968,12 +1056,12 @@ fn print_gensort_sample_records(output: &Box<dyn es::SortOutput>) {
         }
         all_records.push((key, payload));
     }
-    
+
     let total = all_records.len();
     if total == 0 {
         return;
     }
-    
+
     println!("\nFirst 5 records:");
     for (i, (key, _payload)) in first_records.iter().enumerate() {
         print!("  Record {}: Key = ", i);
@@ -982,7 +1070,7 @@ fn print_gensort_sample_records(output: &Box<dyn es::SortOutput>) {
             Err(_) => println!("{:?}", key),
         }
     }
-    
+
     if total > 5 {
         println!("\nLast 5 records:");
         let start_idx = total.saturating_sub(5);
