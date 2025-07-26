@@ -92,6 +92,7 @@ pub mod parquet_input_direct;
 pub mod run;
 pub mod sort_buffer;
 pub mod sorter;
+pub mod sort_policy;
 
 // Export the main types
 pub use aligned_reader::{AlignedChunkReader, AlignedReader};
