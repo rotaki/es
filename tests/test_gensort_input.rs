@@ -174,11 +174,13 @@ fn test_gensort_sort_integration() {
 
     // Create unsorted test data
     let mut records = Vec::new();
-    let keys = [b"key0000005".to_vec(),
+    let keys = [
+        b"key0000005".to_vec(),
         b"key0000001".to_vec(),
         b"key0000003".to_vec(),
         b"key0000002".to_vec(),
-        b"key0000004".to_vec()];
+        b"key0000004".to_vec(),
+    ];
 
     for (i, key) in keys.iter().enumerate() {
         records.push((key.clone(), vec![i as u8; 90]));

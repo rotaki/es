@@ -341,7 +341,11 @@ impl ExternalSorter {
 
                         sort_buffer.reset();
                         if !sort_buffer.append(&key, &value) {
-                            panic!("Single entry too large for buffer");
+                            panic!(
+                                "Single entry too large for sort buffer: key size {}, value size {}",
+                                key.len(),
+                                value.len()
+                            );
                         }
                     }
                 }

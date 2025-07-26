@@ -15,8 +15,8 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use es::constants::DEFAULT_BUFFER_SIZE;
 use es::{
-    CsvDirectConfig, CsvInputDirect, ExternalSorter,
-    SortInput, Sorter, order_preserving_encoding::decode_bytes,
+    CsvDirectConfig, CsvInputDirect, ExternalSorter, SortInput, Sorter,
+    order_preserving_encoding::decode_bytes,
 };
 use std::env;
 use std::path::Path;

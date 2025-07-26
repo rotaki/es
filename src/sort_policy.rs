@@ -17,7 +17,7 @@ impl std::fmt::Display for PolicyParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[{}]: Run Size = {:.1} MB, Run Gen Threads = {:.1}, Merge Threads = {:.1}, Run Gen Memory = {:.1} MB, Merge Memory = {:.1} MB",
+            "[{}]: Run Size: {:.1} MB, Run Gen Threads: {:.1}, Merge Threads: {:.1}, Run Gen Memory: {:.1} MB, Merge Memory: {:.1} MB",
             self.name,
             self.run_size_mb,
             self.run_gen_threads,

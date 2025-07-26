@@ -19,8 +19,8 @@ struct SortArgs {
     memory_mb: usize,
 
     /// Directory for temporary files
-    #[arg(short = 't', long, default_value = ".")]
-    temp_dir: PathBuf,
+    #[arg(short, long, default_value = ".")]
+    dir: PathBuf,
 
     /// Verify sorted output
     #[arg(short, long)]
@@ -53,6 +53,9 @@ struct BenchmarkResult {
     threads: usize,
     memory_mb: usize,
     memory_str: String,
+    run_size_mb: f64,
+    run_gen_threads: usize,
+    merge_threads: usize,
     runs: usize,
     total_time: f64,
     run_gen_time: f64,
@@ -77,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.input,
         args.threads,
         args.memory_mb,
-        &args.temp_dir,
+        &args.dir,
         args.verify,
         args.benchmark_runs,
     )?;
@@ -89,26 +92,9 @@ fn sort_gensort(
     input: &Path,
     threads: usize,
     memory_mb: usize,
-    temp_dir: &Path,
+    dir: &Path,
     verify: bool,
     benchmark_runs: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Sorting GenSort binary file");
-    println!("Input: {:?}", input);
-    println!("Threads: {}", threads);
-    println!("Memory limit: {} MB", memory_mb);
-    println!();
-
-    run_gensort_benchmark(input, threads, memory_mb, temp_dir, benchmark_runs, verify)
-}
-
-fn run_gensort_benchmark(
-    input: &Path,
-    threads: usize,
-    memory_mb: usize,
-    temp_dir: &Path,
-    num_runs: usize,
-    verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get record count
     let gensort_input = GenSortInputDirect::new(input)?;
@@ -126,12 +112,9 @@ fn run_gensort_benchmark(
 
     println!("\n=== GENSORT BENCHMARK MODE ===");
     println!("Input file: {:?}", input);
-    println!(
-        "File size: {} GiB",
-        file_size as f64 / (1024.0 * 1024.0 * 1024.0)
-    );
+    println!("File size: {}", bytes_to_human_readable(file_size as usize));
     println!("Total entries: {}", total_entries);
-    println!("Runs per configuration: {}", num_runs);
+    println!("Runs per configuration: {}", benchmark_runs);
     println!("Verify output: {}", verify);
     println!();
 
@@ -139,24 +122,33 @@ fn run_gensort_benchmark(
     for (policy, params) in policies {
         println!("Running benchmark for policy: {}", policy.name());
         println!("Parameters: {}", params);
+        println!("{}", "=".repeat(80));
 
         let mut accumulated_stats = RunStats::default();
         let mut valid_runs = 0;
 
-        for run in 1..=num_runs {
-            print!("  Run {}/{}: ", run, num_runs);
+        for run in 1..=benchmark_runs {
+            print!("  Run {}/{}: ", run, benchmark_runs);
+
+            let temp_dir = dir.join(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs()
+                    .to_string(),
+            );
+            std::fs::create_dir_all(&temp_dir)?;
 
             let gensort_input = Box::new(GenSortInputDirect::new(input)?);
 
             let (runs, run_gen_stats) = ExternalSorter::run_generation(
                 gensort_input.clone(),
                 params.run_gen_threads as usize,
-                params.run_size_mb as usize * 1024 * 1024,
-                temp_dir,
+                (params.run_size_mb * 1024.0 * 1024.0) as usize,
+                &temp_dir,
             )?;
 
             let (merged_runs, merge_stats) =
-                ExternalSorter::merge(runs, params.merge_threads as usize, temp_dir)?;
+                ExternalSorter::merge(runs, params.merge_threads as usize, &temp_dir)?;
 
             let stats = SortStats {
                 num_runs: run_gen_stats.num_runs,
@@ -208,6 +200,10 @@ fn run_gensort_benchmark(
                 verify_sorted_output(true, &output)?;
                 println!("    Verification passed!");
             }
+            println!();
+
+            // Remove temporary directory
+            std::fs::remove_dir_all(&temp_dir)?;
         }
 
         // Calculate averages
@@ -234,6 +230,9 @@ fn run_gensort_benchmark(
             threads,
             memory_mb,
             memory_str: bytes_to_human_readable(memory_mb * 1024 * 1024),
+            run_size_mb: params.run_size_mb,
+            run_gen_threads: params.run_gen_threads as usize,
+            merge_threads: params.merge_threads as usize,
             runs: avg_runs,
             total_time: avg_total,
             run_gen_time: avg_run_gen,
@@ -276,13 +275,16 @@ fn bytes_to_human_readable(bytes: usize) -> String {
 }
 
 fn print_benchmark_summary(results: &[BenchmarkResult]) {
-    println!("\n{}", "=".repeat(120));
+    println!("\n{}", "=".repeat(140));
     println!("Benchmark Results Summary");
-    println!("{}", "=".repeat(120));
+    println!("{}", "=".repeat(140));
     println!(
-        "{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
+        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
         "Threads",
         "Memory",
+        "Run Size",
+        "Gen Thr",
+        "Merge Thr",
         "Runs",
         "Total (s)",
         "RunGen (s)",
@@ -293,16 +295,19 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
         "Write MB"
     );
     println!(
-        "{:<8} {:<12} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
-        "", "", "", "", "", "", "", "(M entries/s)", "", ""
+        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
+        "", "", "(MB)", "", "", "", "", "", "", "", "(M entries/s)", "", ""
     );
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(140));
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
+            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
             result.threads,
             result.memory_str,
+            result.run_size_mb,
+            result.run_gen_threads,
+            result.merge_threads,
             result.runs,
             result.total_time,
             result.run_gen_time,
@@ -313,11 +318,11 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             result.write_mb,
         );
     }
-    println!("{}", "=".repeat(120));
+    println!("{}", "=".repeat(140));
 
     // Print detailed I/O statistics
     println!("\nDetailed I/O Statistics Summary:");
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(120));
     println!(
         "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
         "Threads", "Memory", "Run Gen Reads", "Run Gen Writes", "Merge Reads", "Merge Writes"
@@ -326,7 +331,7 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
         "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
         "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)"
     );
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(120));
 
     for result in results {
         println!(
@@ -345,7 +350,7 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             format!("{} / {:.1}", result.merge_write_ops, result.merge_write_mb),
         );
     }
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(120));
 }
 
 fn verify_sorted_output(
