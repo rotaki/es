@@ -34,7 +34,7 @@ for size in 10 20 30 40 50 60 70 80 90 100; do
     echo ""
     
     # Uncomment the line below to actually run the generation
-    # $GENSORT -n$THREADS $records "$output_file"
+    $GENSORT -t$THREADS $records "$output_file"
 done
 
 echo "Dataset generation commands prepared."
