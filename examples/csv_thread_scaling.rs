@@ -18,8 +18,8 @@ use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::process;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
@@ -264,7 +264,9 @@ fn print_usage(program_name: &str) {
     println!(
         "  -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 1)"
     );
-    println!("  -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)");
+    println!(
+        "  -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)"
+    );
     println!("  -d, --delimiter <CHAR>       CSV delimiter character (default: ,)");
     println!("  --headers                    CSV file has headers");
     println!("  -h, --help                   Show this help message");

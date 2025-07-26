@@ -1,6 +1,6 @@
 use crate::aligned_reader::AlignedReader;
 use crate::constants::open_file_with_direct_io;
-use crate::{file_size_fd, IoStatsTracker, SortInput};
+use crate::{IoStatsTracker, SortInput, file_size_fd};
 use std::io::Read;
 use std::os::fd::RawFd;
 use std::os::unix::io::IntoRawFd;
@@ -12,7 +12,7 @@ const PAYLOAD_SIZE: usize = 90;
 const RECORD_SIZE: usize = KEY_SIZE + PAYLOAD_SIZE;
 
 /// Direct I/O reader for GenSort binary format
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GenSortInputDirect {
     fd: RawFd,
     num_records: usize,
@@ -48,6 +48,10 @@ impl GenSortInputDirect {
 
     pub fn len(&self) -> usize {
         self.num_records
+    }
+
+    pub fn file_size(&self) -> Result<u64, String> {
+        file_size_fd(self.fd).map_err(|e| format!("Failed to get file size: {}", e))
     }
 
     pub fn is_empty(&self) -> bool {

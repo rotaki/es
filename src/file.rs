@@ -1,14 +1,8 @@
 use libc::{c_void, fstat, off_t, pread, pwrite};
-use std::collections::HashMap;
-use std::fs;
 use std::io;
-use std::ops::Deref;
-use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
 
-use crate::constants::{open_file_with_direct_io, DIRECT_IO_ALIGNMENT};
+use crate::constants::DIRECT_IO_ALIGNMENT;
 
 /// Get the size of a file using its raw file descriptor
 pub fn file_size_fd(fd: RawFd) -> io::Result<u64> {

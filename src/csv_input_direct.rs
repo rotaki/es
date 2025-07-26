@@ -2,7 +2,7 @@
 
 use crate::aligned_reader::AlignedReader;
 use crate::constants::open_file_with_direct_io;
-use crate::{file_size_fd, order_preserving_encoding::*, IoStatsTracker, SortInput};
+use crate::{IoStatsTracker, SortInput, file_size_fd, order_preserving_encoding::*};
 use arrow::datatypes::{DataType, Schema};
 use chrono::Datelike;
 use std::io::Seek;

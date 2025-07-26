@@ -1,5 +1,5 @@
 /// External sorting policy parameter calculator
-/// 
+///
 /// This module computes run generation threads, merge threads, and run sizes
 /// for different external sorting policies.
 
@@ -11,6 +11,21 @@ pub struct PolicyParameters {
     pub merge_threads: f64,
     pub run_gen_memory_mb: f64,
     pub merge_memory_mb: f64,
+}
+
+impl std::fmt::Display for PolicyParameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]: Run Size = {:.1} MB, Run Gen Threads = {:.1}, Merge Threads = {:.1}, Run Gen Memory = {:.1} MB, Merge Memory = {:.1} MB",
+            self.name,
+            self.run_size_mb,
+            self.run_gen_threads,
+            self.merge_threads,
+            self.run_gen_memory_mb,
+            self.merge_memory_mb
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,10 +43,10 @@ pub struct SortConfig {
 impl Default for SortConfig {
     fn default() -> Self {
         Self {
-            memory_mb: 4096.0,      // 4 GB
-            dataset_mb: 32768.0,    // 32 GB
-            page_size_kb: 64.0,     // 64 KB
-            max_threads: 32.0,      // Maximum/fixed thread count
+            memory_mb: 4096.0,   // 4 GB
+            dataset_mb: 32768.0, // 32 GB
+            page_size_kb: 64.0,  // 64 KB
+            max_threads: 32.0,   // Maximum/fixed thread count
         }
     }
 }
@@ -58,14 +73,22 @@ impl Policy {
             Policy::ParallelGenSerialMergeTinyRuns,
         ]
     }
-    
+
     /// Get policy name
-    pub fn name(&self, max_threads: f64) -> String {
+    pub fn name(&self) -> String {
         match self {
-            Policy::SerialGenParallelMergeLongRuns => "Optimize Merge (Serial Gen)".to_string(),
-            Policy::BalancedGenAndMergeGenBoundRuns => format!("Balanced Parallel (T={}, Gen-Bound)", max_threads as i32),
-            Policy::BalancedGenAndMergeMergeBoundRuns => format!("Balanced Parallel (T={}, Merge-Bound)", max_threads as i32),
-            Policy::ParallelGenSerialMergeTinyRuns => "Min Memory (Serial Merge)".to_string(),
+            Policy::SerialGenParallelMergeLongRuns => {
+                "SerialGen, ParallelMerge, LongRuns".to_string()
+            }
+            Policy::BalancedGenAndMergeGenBoundRuns => {
+                "BalancedGenAndMerge, GenBoundRuns".to_string()
+            }
+            Policy::BalancedGenAndMergeMergeBoundRuns => {
+                "BalancedGenAndMerge, MergeBoundRuns".to_string()
+            }
+            Policy::ParallelGenSerialMergeTinyRuns => {
+                "ParallelGen, SerialMerge, TinyRuns".to_string()
+            }
         }
     }
 }
@@ -74,9 +97,9 @@ impl Policy {
 pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> PolicyParameters {
     let m = config.memory_mb;
     let d = config.dataset_mb;
-    let p = config.page_size_kb / 1024.0;  // Convert KB to MB
+    let p = config.page_size_kb / 1024.0; // Convert KB to MB
     let t_max = config.max_threads;
-    
+
     match policy {
         Policy::ParallelGenSerialMergeTinyRuns => {
             // Minimize memory usage: Use merge constraint at T=1
@@ -84,9 +107,9 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
             let run_size = (d * p * 1.0) / m;
             let run_gen_threads = (m / run_size).min(t_max);
             let merge_threads = (m / ((d / run_size) * p)).min(t_max);
-            
+
             PolicyParameters {
-                name: policy.name(t_max),
+                name: policy.name(),
                 run_size_mb: run_size,
                 run_gen_threads,
                 merge_threads,
@@ -94,16 +117,16 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
                 merge_memory_mb: (d / run_size) * merge_threads * p,
             }
         }
-        
+
         Policy::BalancedGenAndMergeGenBoundRuns => {
             // Balanced parallelism: Use run gen constraint at T=max
             // Run size = M / T where T=max_threads
             let run_size = m / t_max;
             let run_gen_threads = t_max;
             let merge_threads = (m / ((d / run_size) * p)).min(t_max);
-            
+
             PolicyParameters {
-                name: policy.name(t_max),
+                name: policy.name(),
                 run_size_mb: run_size,
                 run_gen_threads,
                 merge_threads,
@@ -111,16 +134,16 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
                 merge_memory_mb: (d / run_size) * merge_threads * p,
             }
         }
-        
+
         Policy::BalancedGenAndMergeMergeBoundRuns => {
             // Optimize generation: Use merge constraint at T=max
             // Run size = D × P × T / M where T=max_threads
             let run_size = (d * p * t_max) / m;
             let run_gen_threads = (m / run_size).min(t_max);
             let merge_threads = t_max;
-            
+
             PolicyParameters {
-                name: policy.name(t_max),
+                name: policy.name(),
                 run_size_mb: run_size,
                 run_gen_threads,
                 merge_threads,
@@ -128,16 +151,16 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
                 merge_memory_mb: (d / run_size) * merge_threads * p,
             }
         }
-        
+
         Policy::SerialGenParallelMergeLongRuns => {
             // Optimize merge: Use run gen constraint at T=1
             // Run size = M / T where T=1
             let run_size = m / 1.0;
             let run_gen_threads = 1.0;
             let merge_threads = (m / ((d / run_size) * p)).min(t_max);
-            
+
             PolicyParameters {
-                name: policy.name(t_max),
+                name: policy.name(),
                 run_size_mb: run_size,
                 run_gen_threads,
                 merge_threads,
@@ -179,70 +202,113 @@ pub fn calculate_run_count(dataset_mb: f64, run_size_mb: f64) -> f64 {
 pub fn print_policy_params(policy: Policy, params: &PolicyParameters, config: &SortConfig) {
     println!("\n{} ({})", params.name, format!("{:?}", policy));
     println!("  Run Size: {:.1} MB", params.run_size_mb);
-    
+
     // Show if run gen threads are capped
     let uncapped_run_gen = config.memory_mb / params.run_size_mb;
     if uncapped_run_gen > config.max_threads && params.run_gen_threads == config.max_threads {
-        println!("  Run Generation: {:.1} threads (capped from {:.0}) × {:.1} MB = {:.1} MB", 
-                 params.run_gen_threads, uncapped_run_gen, params.run_size_mb, params.run_gen_memory_mb);
+        println!(
+            "  Run Generation: {:.1} threads (capped from {:.0}) × {:.1} MB = {:.1} MB",
+            params.run_gen_threads, uncapped_run_gen, params.run_size_mb, params.run_gen_memory_mb
+        );
     } else {
-        println!("  Run Generation: {:.1} threads × {:.1} MB = {:.1} MB", 
-                 params.run_gen_threads, params.run_size_mb, params.run_gen_memory_mb);
+        println!(
+            "  Run Generation: {:.1} threads × {:.1} MB = {:.1} MB",
+            params.run_gen_threads, params.run_size_mb, params.run_gen_memory_mb
+        );
     }
-    
+
     // Show if merge threads are capped
-    let uncapped_merge = config.memory_mb / ((config.dataset_mb / params.run_size_mb) * (config.page_size_kb / 1024.0));
+    let uncapped_merge = config.memory_mb
+        / ((config.dataset_mb / params.run_size_mb) * (config.page_size_kb / 1024.0));
     if uncapped_merge > config.max_threads && params.merge_threads == config.max_threads {
-        println!("  Merge Phase: {:.1} threads (capped from {:.0}) × ({:.0}/{:.1} runs) × {:.1} KB = {:.1} MB",
-                 params.merge_threads, uncapped_merge, config.dataset_mb, params.run_size_mb, 
-                 config.page_size_kb, params.merge_memory_mb);
+        println!(
+            "  Merge Phase: {:.1} threads (capped from {:.0}) × ({:.0}/{:.1} runs) × {:.1} KB = {:.1} MB",
+            params.merge_threads,
+            uncapped_merge,
+            config.dataset_mb,
+            params.run_size_mb,
+            config.page_size_kb,
+            params.merge_memory_mb
+        );
     } else {
-        println!("  Merge Phase: {:.1} threads × ({:.0}/{:.1} runs) × {:.1} KB = {:.1} MB",
-                 params.merge_threads, config.dataset_mb, params.run_size_mb, 
-                 config.page_size_kb, params.merge_memory_mb);
+        println!(
+            "  Merge Phase: {:.1} threads × ({:.0}/{:.1} runs) × {:.1} KB = {:.1} MB",
+            params.merge_threads,
+            config.dataset_mb,
+            params.run_size_mb,
+            config.page_size_kb,
+            params.merge_memory_mb
+        );
     }
-    
-    println!("  Total Runs: {:.0}", calculate_run_count(config.dataset_mb, params.run_size_mb));
+
+    println!(
+        "  Total Runs: {:.0}",
+        calculate_run_count(config.dataset_mb, params.run_size_mb)
+    );
     println!("  Bottleneck: {}", get_bottleneck(params));
-    println!("  Feasible: {}", if is_feasible(params, config.memory_mb) { "Yes" } else { "No" });
+    println!(
+        "  Feasible: {}",
+        if is_feasible(params, config.memory_mb) {
+            "Yes"
+        } else {
+            "No"
+        }
+    );
 }
 
 /// Print comparison table
 pub fn print_comparison_table(config: &SortConfig) {
-    println!("\nPolicy Comparison for M={:.0}GB, D={:.0}GB, Max T={:.0}",
-             config.memory_mb / 1024.0, config.dataset_mb / 1024.0, config.max_threads);
-    println!("{}", "=".repeat(120));
-    println!("{:<20} {:>15} {:>20} {:>20} {:>20} {:>20}", 
-             "Policy", "Run Size (MB)", "Run Gen Threads", "Merge Threads", "Run Gen Memory (MB)", "Merge Memory (MB)");
-    println!("{}", "=".repeat(120));
-    
+    println!(
+        "\nPolicy Comparison for M={:.0}GB, D={:.0}GB, Max T={:.0}",
+        config.memory_mb / 1024.0,
+        config.dataset_mb / 1024.0,
+        config.max_threads
+    );
+    println!("{}", "=".repeat(140));
+    println!(
+        "{:<40} {:>15} {:>20} {:>20} {:>20} {:>20}",
+        "Policy",
+        "Run Size (MB)",
+        "Run Gen Threads",
+        "Merge Threads",
+        "Run Gen Memory (MB)",
+        "Merge Memory (MB)"
+    );
+    println!("{}", "=".repeat(140));
+
     for (_policy, params) in get_all_policies(*config) {
-        println!("{:<20} {:>15.1} {:>20.1} {:>20.1} {:>20.1} {:>20.1}",
-                 params.name, params.run_size_mb, params.run_gen_threads, 
-                 params.merge_threads, params.run_gen_memory_mb, params.merge_memory_mb);
+        println!(
+            "{:<40} {:>15.1} {:>20.1} {:>20.1} {:>20.1} {:>20.1}",
+            params.name,
+            params.run_size_mb,
+            params.run_gen_threads,
+            params.merge_threads,
+            params.run_gen_memory_mb,
+            params.merge_memory_mb
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_policy1() {
         let config = SortConfig {
-            memory_mb: 1024.0,      // 1 GB
-            dataset_mb: 32768.0,    // 32 GB
-            page_size_kb: 64.0,     // 64 KB
+            memory_mb: 1024.0,   // 1 GB
+            dataset_mb: 32768.0, // 32 GB
+            page_size_kb: 64.0,  // 64 KB
             max_threads: 32.0,
         };
-        
+
         let params = calculate_policy_parameters(Policy::ParallelGenSerialMergeTinyRuns, config);
-        
-        // Expected: run_size = 32768 * (64/1024) * 1 / 1024 = 2 MB
+
+        // Expected: run_size = 32768 * 64 / 1024 / 1024 = 2 MB
         assert!((params.run_size_mb - 2.0).abs() < 0.01);
-        assert!((params.run_gen_threads - 512.0).abs() < 0.01);
+        assert!((params.run_gen_threads - 32.0).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_policy2() {
         let config = SortConfig {
@@ -251,9 +317,9 @@ mod tests {
             page_size_kb: 64.0,
             max_threads: 32.0,
         };
-        
+
         let params = calculate_policy_parameters(Policy::BalancedGenAndMergeGenBoundRuns, config);
-        
+
         // Expected: run_size = 1024 / 32 = 32 MB
         assert!((params.run_size_mb - 32.0).abs() < 0.01);
         assert_eq!(params.run_gen_threads, 32.0);
@@ -263,9 +329,9 @@ mod tests {
     fn test_all_policies() {
         let config = SortConfig {
             memory_mb: 1024.0,
-            dataset_mb: 32768.0,
+            dataset_mb: 1024.0 * 100.0, // 128 GB
             page_size_kb: 64.0,
-            max_threads: 32.0,
+            max_threads: 40.0,
         };
         print_comparison_table(&config);
     }

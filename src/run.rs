@@ -3,7 +3,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::aligned_reader::AlignedReader;
 use crate::aligned_writer::AlignedWriter;
-use crate::constants::{align_down, PAGE_SIZE};
+use crate::constants::{PAGE_SIZE, align_down};
 use crate::io_stats::IoStatsTracker;
 use std::io::{Read, Write};
 use std::os::fd::RawFd;
@@ -295,8 +295,8 @@ impl Iterator for RunIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::open_file_with_direct_io;
     use crate::Run;
+    use crate::constants::open_file_with_direct_io;
     use std::os::fd::IntoRawFd;
     use std::path::PathBuf;
 
@@ -718,8 +718,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_run_creation() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count = Arc::new(AtomicUsize::new(0));

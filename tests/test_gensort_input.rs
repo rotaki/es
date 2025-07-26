@@ -108,16 +108,18 @@ fn test_gensort_invalid_file_size() {
 
     // Create a file with invalid size (not multiple of 100)
     let mut file = File::create(&test_file).unwrap();
-    file.write_all(&vec![0u8; 150]).unwrap(); // 1.5 records
+    file.write_all(&[0u8; 150]).unwrap(); // 1.5 records
     file.sync_all().unwrap();
     drop(file);
 
     // Should fail to open
     let result = GenSortInputDirect::new(&test_file);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .contains("not a multiple of record size"));
+    assert!(
+        result
+            .unwrap_err()
+            .contains("not a multiple of record size")
+    );
 }
 
 #[test]
@@ -172,13 +174,11 @@ fn test_gensort_sort_integration() {
 
     // Create unsorted test data
     let mut records = Vec::new();
-    let keys = vec![
-        b"key0000005".to_vec(),
+    let keys = [b"key0000005".to_vec(),
         b"key0000001".to_vec(),
         b"key0000003".to_vec(),
         b"key0000002".to_vec(),
-        b"key0000004".to_vec(),
-    ];
+        b"key0000004".to_vec()];
 
     for (i, key) in keys.iter().enumerate() {
         records.push((key.clone(), vec![i as u8; 90]));

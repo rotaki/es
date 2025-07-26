@@ -1,7 +1,7 @@
 //! I/O statistics tracking module
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Tracks I/O statistics for debugging and performance analysis
 #[derive(Debug, Clone)]

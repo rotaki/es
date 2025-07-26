@@ -7,7 +7,7 @@ use parquet::file::reader::{ChunkReader, Length};
 
 use crate::aligned_buffer::AlignedBuffer;
 use crate::constants::{
-    align_down, align_up, offset_within_block, DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT,
+    DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_down, align_up, offset_within_block,
 };
 use crate::file::pread_fd;
 use crate::file_size_fd;

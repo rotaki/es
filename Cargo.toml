@@ -1,7 +1,7 @@
 [package]
 name = "es"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 libc = "0.2"
@@ -16,11 +16,3 @@ clap = { version = "4.0", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.2"
-
-[[bin]]
-name = "external_sort"
-path = "src/bin/external_sort.rs"
-
-[[bin]]
-name = "unified-sort"
-path = "examples/unified_sort_cli.rs"

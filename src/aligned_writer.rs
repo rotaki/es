@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::os::unix::io::RawFd;
 
 use crate::aligned_buffer::AlignedBuffer;
-use crate::constants::{align_up, DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT};
+use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
 use crate::file::pwrite_fd;
 use crate::io_stats::IoStatsTracker;
 

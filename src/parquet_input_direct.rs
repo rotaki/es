@@ -2,7 +2,7 @@
 
 use crate::constants::open_file_with_direct_io;
 use crate::{
-    aligned_reader::AlignedChunkReader, order_preserving_encoding::*, IoStatsTracker, SortInput,
+    IoStatsTracker, SortInput, aligned_reader::AlignedChunkReader, order_preserving_encoding::*,
 };
 use arrow::array::Array;
 use arrow::datatypes::DataType;
@@ -319,8 +319,8 @@ mod tests {
         BinaryArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };
     use arrow::datatypes::{DataType, Field, Schema};
-    use parquet::arrow::arrow_writer::ArrowWriterOptions;
     use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_writer::ArrowWriterOptions;
     use parquet::basic::{Compression, Encoding, GzipLevel};
     use parquet::file::properties::WriterProperties;
     use std::collections::HashMap;

@@ -361,7 +361,9 @@ fn print_usage(program_name: &str) {
     println!(
         "  -v, --value-columns <COLS>   Comma-separated list of value column indices (default: 1)"
     );
-    println!("  -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)");
+    println!(
+        "  -t, --threads <LIST>         Comma-separated list of thread counts to test (default: 1,2,4,8,16)"
+    );
     println!("  -b, --buffer-size <KB>       Buffer size in KB for direct I/O (default: 256)");
     println!("  -h, --help                   Show this help message");
     println!();
