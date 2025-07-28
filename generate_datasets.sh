@@ -21,8 +21,8 @@ calculate_records() {
     echo $records
 }
 
-# Generate datasets from 10 to 100 GiB in 10 GiB increments
-for size in 10 20 30 40 50 60 70 80 90 100; do
+# Generate datasets from 20 to 100 GiB in 20 GiB increments
+for size in 20 40 60 80 100; do
     records=$(calculate_records $size)
     output_file="$OUTPUT_DIR/gensort_${size}GiB.data"
     

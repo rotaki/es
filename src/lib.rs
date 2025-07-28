@@ -87,6 +87,123 @@ impl std::fmt::Display for SortStats {
         if let Some(io_stats) = &self.merge_io_stats {
             write!(f, "  (M) I/O stats: {}\n", io_stats)?;
         }
+
+        // Display read amplification (sparse indexing effectiveness)
+        if let (Some(run_gen_io), Some(merge_io)) =
+            (&self.run_generation_io_stats, &self.merge_io_stats)
+        {
+            if run_gen_io.write_bytes > 0 {
+                let read_amplification = merge_io.read_bytes as f64 / run_gen_io.write_bytes as f64;
+                let excess_read_pct = (read_amplification - 1.0) * 100.0;
+
+                write!(f, "  Read amplification:\n")?;
+                write!(
+                    f,
+                    "    Run generation writes: {} bytes ({:.2} GB)\n",
+                    run_gen_io.write_bytes,
+                    run_gen_io.write_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+                )?;
+                write!(
+                    f,
+                    "    Merge phase reads: {} bytes ({:.2} GB)\n",
+                    merge_io.read_bytes,
+                    merge_io.read_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+                )?;
+                write!(
+                    f,
+                    "    Read amplification factor: {:.2}x\n",
+                    read_amplification
+                )?;
+                if excess_read_pct > 0.0 {
+                    write!(
+                        f,
+                        "    Excess reads: {:.1}% (sparse indexing overhead)\n",
+                        excess_read_pct
+                    )?;
+                } else if excess_read_pct < 0.0 {
+                    write!(
+                        f,
+                        "    Read reduction: {:.1}% (possible data compression or skipping)\n",
+                        -excess_read_pct
+                    )?;
+                } else {
+                    write!(f, "    Perfect read efficiency (1.0x)\n")?;
+                }
+            }
+        }
+
+        // Display partition imbalance if merge was parallelized
+        if self.merge_entry_num.len() > 1 {
+            write!(f, "  Partition imbalance:\n")?;
+
+            let total_entries: u64 = self.merge_entry_num.iter().sum();
+            let avg_entries = total_entries as f64 / self.merge_entry_num.len() as f64;
+            let min_entries = *self.merge_entry_num.iter().min().unwrap_or(&0);
+            let max_entries = *self.merge_entry_num.iter().max().unwrap_or(&0);
+
+            // Calculate standard deviation
+            let variance = self
+                .merge_entry_num
+                .iter()
+                .map(|&x| {
+                    let diff = x as f64 - avg_entries;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / self.merge_entry_num.len() as f64;
+            let std_dev = variance.sqrt();
+
+            // Calculate coefficient of variation (CV) as a percentage
+            let cv = if avg_entries > 0.0 {
+                (std_dev / avg_entries) * 100.0
+            } else {
+                0.0
+            };
+
+            // Calculate imbalance factor (max/min)
+            let imbalance_factor = if min_entries > 0 {
+                max_entries as f64 / min_entries as f64
+            } else {
+                0.0
+            };
+
+            write!(f, "    Partitions: {}\n", self.merge_entry_num.len())?;
+            write!(f, "    Total entries: {}\n", total_entries)?;
+            write!(f, "    Avg per partition: {:.0}\n", avg_entries)?;
+            write!(
+                f,
+                "    Min entries: {} ({:.1}% of avg)\n",
+                min_entries,
+                if avg_entries > 0.0 {
+                    (min_entries as f64 / avg_entries) * 100.0
+                } else {
+                    0.0
+                }
+            )?;
+            write!(
+                f,
+                "    Max entries: {} ({:.1}% of avg)\n",
+                max_entries,
+                if avg_entries > 0.0 {
+                    (max_entries as f64 / avg_entries) * 100.0
+                } else {
+                    0.0
+                }
+            )?;
+            write!(f, "    Std deviation: {:.0}\n", std_dev)?;
+            write!(f, "    Coefficient of variation: {:.1}%\n", cv)?;
+            write!(
+                f,
+                "    Imbalance factor (max/min): {:.2}x\n",
+                imbalance_factor
+            )?;
+
+            // Show distribution if not too many partitions
+            if self.merge_entry_num.len() <= 32 {
+                write!(f, "    Distribution: {:?}\n", self.merge_entry_num)?;
+            }
+        }
+
         Ok(())
     }
 }

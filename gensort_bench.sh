@@ -73,7 +73,7 @@ echo ""
 # Check if data files exist
 echo "Checking for data files..."
 missing_files=0
-for size in 10 20 30 40 50 60 70 80 90 100; do
+for size in 20 40 60 80 100; do
     input_file="$DATA_DIR/gensort_${size}GiB.data"
     if [ ! -f "$input_file" ]; then
         echo "  Missing: $input_file"
@@ -97,7 +97,7 @@ echo ""
 # Run benchmarks for each dataset size, memory configuration, and thread count
 start_time=$(date +%s)
 
-for size in 10 20 30 40 50 60 70 80 90 100; do
+for size in 20 40 60 80 100; do
     input_file="$DATA_DIR/gensort_${size}GiB.data"
     
     for memory_mb in "${MEMORY_SIZES[@]}"; do

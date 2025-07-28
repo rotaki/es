@@ -50,6 +50,8 @@ struct RunStats {
     merge_read_mb: f64,
     merge_write_ops: u64,
     merge_write_mb: f64,
+    imbalance_sum: f64,
+    imbalance_count: usize,
 }
 
 #[derive(Clone)]
@@ -76,6 +78,8 @@ struct BenchmarkResult {
     merge_read_mb: f64,
     merge_write_ops: u64,
     merge_write_mb: f64,
+    imbalance_factor: f64,
+    read_amplification: f64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -230,6 +234,17 @@ fn sort_gensort(
                 accumulated_stats.merge_write_mb += io.write_bytes as f64 / 1_000_000.0;
             }
 
+            // Calculate imbalance factor if merge was parallelized
+            if stats.merge_entry_num.len() > 1 {
+                let min_entries = *stats.merge_entry_num.iter().min().unwrap_or(&0);
+                let max_entries = *stats.merge_entry_num.iter().max().unwrap_or(&0);
+                if min_entries > 0 {
+                    let imbalance = max_entries as f64 / min_entries as f64;
+                    accumulated_stats.imbalance_sum += imbalance;
+                    accumulated_stats.imbalance_count += 1;
+                }
+            }
+
             valid_runs += 1;
             println!(
                 "{:.2}s",
@@ -272,6 +287,20 @@ fn sort_gensort(
         let total_read_mb = rg_read_mb + m_read_mb;
         let total_write_mb = rg_write_mb + m_write_mb;
 
+        // Calculate average imbalance factor
+        let avg_imbalance_factor = if accumulated_stats.imbalance_count > 0 {
+            accumulated_stats.imbalance_sum / accumulated_stats.imbalance_count as f64
+        } else {
+            1.0 // Perfect balance or single partition
+        };
+
+        // Calculate read amplification
+        let read_amplification = if rg_write_mb > 0.0 {
+            m_read_mb / rg_write_mb
+        } else {
+            1.0
+        };
+
         all_results.push(BenchmarkResult {
             threads,
             memory_mb,
@@ -295,6 +324,8 @@ fn sort_gensort(
             merge_read_mb: m_read_mb,
             merge_write_ops: m_write_ops,
             merge_write_mb: m_write_mb,
+            imbalance_factor: avg_imbalance_factor,
+            read_amplification,
         });
     }
 
@@ -321,11 +352,11 @@ fn bytes_to_human_readable(bytes: usize) -> String {
 }
 
 fn print_benchmark_summary(results: &[BenchmarkResult]) {
-    println!("\n{}", "=".repeat(140));
+    println!("\n{}", "=".repeat(160));
     println!("Benchmark Results Summary");
-    println!("{}", "=".repeat(140));
+    println!("{}", "=".repeat(160));
     println!(
-        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
+        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
         "Threads",
         "Memory",
         "Run Size",
@@ -338,17 +369,18 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
         "Entries",
         "Throughput",
         "Read MB",
-        "Write MB"
+        "Write MB",
+        "Imbalance"
     );
     println!(
-        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10}",
-        "", "", "(MB)", "", "", "", "", "", "", "", "(M entries/s)", "", ""
+        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
+        "", "", "(MB)", "", "", "", "", "", "", "", "(M entries/s)", "", "", "Factor"
     );
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(160));
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1}",
+            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1} {:<12.2}",
             result.threads,
             result.memory_str,
             result.run_size_mb,
@@ -362,26 +394,37 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             result.throughput,
             result.read_mb,
             result.write_mb,
+            if result.imbalance_factor > 1.0 {
+                format!("{:.3}x", result.imbalance_factor)
+            } else {
+                "N/A".to_string()
+            },
         );
     }
-    println!("{}", "=".repeat(140));
+    println!("{}", "=".repeat(152));
 
     // Print detailed I/O statistics
     println!("\nDetailed I/O Statistics Summary:");
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(140));
     println!(
-        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
-        "Threads", "Memory", "Run Gen Reads", "Run Gen Writes", "Merge Reads", "Merge Writes"
+        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+        "Threads",
+        "Memory",
+        "Run Gen Reads",
+        "Run Gen Writes",
+        "Merge Reads",
+        "Merge Writes",
+        "Read Amplif."
     );
     println!(
-        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
-        "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)"
+        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+        "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)", "Factor"
     );
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(140));
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20}",
+            "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
             result.threads,
             result.memory_str,
             format!(
@@ -394,9 +437,10 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             ),
             format!("{} / {:.1}", result.merge_read_ops, result.merge_read_mb),
             format!("{} / {:.1}", result.merge_write_ops, result.merge_write_mb),
+            format!("{:.3}x", result.read_amplification),
         );
     }
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(140));
 }
 
 fn verify_sorted_output(
