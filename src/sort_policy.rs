@@ -53,41 +53,45 @@ impl Default for SortConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Policy {
-    /// Optimize for merge phase: Large runs, serial generation (T=1, run gen constraint)
-    SerialGenParallelMergeLongRuns,
-    /// Balance both phases: Medium runs, parallel generation (T=max, run gen constraint)
-    BalancedGenAndMergeGenBoundRuns,
-    /// Balance both phases: Medium runs, parallel merge (T=max, merge constraint)
-    BalancedGenAndMergeMergeBoundRuns,
-    /// Minimize memory: Tiny runs, serial merge (T=1, merge constraint)
-    ParallelGenSerialMergeTinyRuns,
+    /// Policy 1: Tiny runs to maximize parallelism in run generation, serial merge
+    TinyRunsMaxParallelGenSerialMerge,
+    /// Policy 2: Huge runs with serial generation, maximize merge parallelism
+    HugeRunsSerialGenMaxParallelMerge,
+    /// Policy 3: Medium runs with balanced parallelism at constraint intersection
+    MediumRunsBalancedParallelism,
+    /// Policy 4: Generation-bound runs with max parallel generation, limited parallel merge
+    GenBoundRunsMaxParallelGenLimitedParallelMerge,
+    /// Policy 5: Merge-bound runs with limited parallel generation, max parallel merge
+    MergeBoundRunsLimitedParallelGenMaxParallelMerge,
 }
 
 impl Policy {
     /// Get all policies
     pub fn all() -> Vec<Policy> {
         vec![
-            Policy::SerialGenParallelMergeLongRuns,
-            Policy::BalancedGenAndMergeGenBoundRuns,
-            Policy::BalancedGenAndMergeMergeBoundRuns,
-            Policy::ParallelGenSerialMergeTinyRuns,
+            Policy::TinyRunsMaxParallelGenSerialMerge,
+            Policy::HugeRunsSerialGenMaxParallelMerge,
+            Policy::MediumRunsBalancedParallelism,
+            Policy::GenBoundRunsMaxParallelGenLimitedParallelMerge,
+            Policy::MergeBoundRunsLimitedParallelGenMaxParallelMerge,
         ]
     }
 
     /// Get policy name
     pub fn name(&self) -> String {
         match self {
-            Policy::SerialGenParallelMergeLongRuns => {
-                "SerialGen, ParallelMerge, LongRuns".to_string()
+            Policy::TinyRunsMaxParallelGenSerialMerge => {
+                "TinyRuns_MaxParallelGen_SerialMerge".to_string()
             }
-            Policy::BalancedGenAndMergeGenBoundRuns => {
-                "BalancedGenAndMerge, GenBoundRuns".to_string()
+            Policy::HugeRunsSerialGenMaxParallelMerge => {
+                "HugeRuns_SerialGen_MaxParallelMerge".to_string()
             }
-            Policy::BalancedGenAndMergeMergeBoundRuns => {
-                "BalancedGenAndMerge, MergeBoundRuns".to_string()
+            Policy::MediumRunsBalancedParallelism => "MediumRuns_BalancedParallelism".to_string(),
+            Policy::GenBoundRunsMaxParallelGenLimitedParallelMerge => {
+                "GenBoundRuns_MaxParallelGen_LimitedParallelMerge".to_string()
             }
-            Policy::ParallelGenSerialMergeTinyRuns => {
-                "ParallelGen, SerialMerge, TinyRuns".to_string()
+            Policy::MergeBoundRunsLimitedParallelGenMaxParallelMerge => {
+                "MergeBoundRuns_LimitedParallelGen_MaxParallelMerge".to_string()
             }
         }
     }
@@ -101,8 +105,8 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
     let t_max = config.max_threads;
 
     match policy {
-        Policy::ParallelGenSerialMergeTinyRuns => {
-            // Minimize memory usage: Use merge constraint at T=1
+        Policy::TinyRunsMaxParallelGenSerialMerge => {
+            // Policy 1: Tiny runs to maximize parallelism in run generation, serial merge
             // Run size = D × P × T / M where T=1
             let run_size = (d * p * 1.0) / m;
             let run_gen_threads = (m / run_size).min(t_max);
@@ -118,8 +122,43 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
             }
         }
 
-        Policy::BalancedGenAndMergeGenBoundRuns => {
-            // Balanced parallelism: Use run gen constraint at T=max
+        Policy::HugeRunsSerialGenMaxParallelMerge => {
+            // Policy 2: Huge runs with serial generation, maximize merge parallelism
+            // Run size = M / T where T=1
+            let run_size = m / 1.0;
+            let run_gen_threads = 1.0;
+            let merge_threads = (m / ((d / run_size) * p)).min(t_max);
+
+            PolicyParameters {
+                name: policy.name(),
+                run_size_mb: run_size,
+                run_gen_threads,
+                merge_threads,
+                run_gen_memory_mb: run_size * run_gen_threads,
+                merge_memory_mb: (d / run_size) * merge_threads * p,
+            }
+        }
+
+        Policy::MediumRunsBalancedParallelism => {
+            // Policy 3: Medium runs with balanced parallelism at constraint intersection
+            // T = M / sqrt(D × P)
+            let t = (m / (d * p).sqrt()) as f64;
+            let run_size = m / t as f64;
+            let run_gen_threads = t.min(t_max);
+            let merge_threads = t.min(t_max);
+
+            PolicyParameters {
+                name: policy.name(),
+                run_size_mb: run_size,
+                run_gen_threads,
+                merge_threads,
+                run_gen_memory_mb: run_size * t as f64,
+                merge_memory_mb: (d / run_size) * t as f64 * p,
+            }
+        }
+
+        Policy::GenBoundRunsMaxParallelGenLimitedParallelMerge => {
+            // Policy 4: Generation-bound runs with max parallel generation, limited parallel merge
             // Run size = M / T where T=max_threads
             let run_size = m / t_max;
             let run_gen_threads = t_max;
@@ -135,29 +174,12 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
             }
         }
 
-        Policy::BalancedGenAndMergeMergeBoundRuns => {
-            // Optimize generation: Use merge constraint at T=max
+        Policy::MergeBoundRunsLimitedParallelGenMaxParallelMerge => {
+            // Policy 5: Merge-bound runs with limited parallel generation, max parallel merge
             // Run size = D × P × T / M where T=max_threads
             let run_size = (d * p * t_max) / m;
             let run_gen_threads = (m / run_size).min(t_max);
             let merge_threads = t_max;
-
-            PolicyParameters {
-                name: policy.name(),
-                run_size_mb: run_size,
-                run_gen_threads,
-                merge_threads,
-                run_gen_memory_mb: run_size * run_gen_threads,
-                merge_memory_mb: (d / run_size) * merge_threads * p,
-            }
-        }
-
-        Policy::SerialGenParallelMergeLongRuns => {
-            // Optimize merge: Use run gen constraint at T=1
-            // Run size = M / T where T=1
-            let run_size = m / 1.0;
-            let run_gen_threads = 1.0;
-            let merge_threads = (m / ((d / run_size) * p)).min(t_max);
 
             PolicyParameters {
                 name: policy.name(),
@@ -302,7 +324,7 @@ mod tests {
             max_threads: 32.0,
         };
 
-        let params = calculate_policy_parameters(Policy::ParallelGenSerialMergeTinyRuns, config);
+        let params = calculate_policy_parameters(Policy::TinyRunsMaxParallelGenSerialMerge, config);
 
         // Expected: run_size = 32768 * 64 / 1024 / 1024 = 2 MB
         assert!((params.run_size_mb - 2.0).abs() < 0.01);
@@ -318,7 +340,10 @@ mod tests {
             max_threads: 32.0,
         };
 
-        let params = calculate_policy_parameters(Policy::BalancedGenAndMergeGenBoundRuns, config);
+        let params = calculate_policy_parameters(
+            Policy::GenBoundRunsMaxParallelGenLimitedParallelMerge,
+            config,
+        );
 
         // Expected: run_size = 1024 / 32 = 32 MB
         assert!((params.run_size_mb - 32.0).abs() < 0.01);

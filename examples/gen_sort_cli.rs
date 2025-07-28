@@ -29,6 +29,10 @@ struct SortArgs {
     /// Number of benchmark runs per configuration
     #[arg(long, default_value = "1")]
     benchmark_runs: usize,
+
+    /// Number of warmup runs before benchmarking (not included in results)
+    #[arg(long, default_value = "0")]
+    warmup_runs: usize,
 }
 
 // Benchmark-related structs
@@ -83,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.dir,
         args.verify,
         args.benchmark_runs,
+        args.warmup_runs,
     )?;
 
     Ok(())
@@ -95,6 +100,7 @@ fn sort_gensort(
     dir: &Path,
     verify: bool,
     benchmark_runs: usize,
+    warmup_runs: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get record count
     let gensort_input = GenSortInputDirect::new(input)?;
@@ -114,6 +120,7 @@ fn sort_gensort(
     println!("Input file: {:?}", input);
     println!("File size: {}", bytes_to_human_readable(file_size as usize));
     println!("Total entries: {}", total_entries);
+    println!("Warmup runs: {}", warmup_runs);
     println!("Runs per configuration: {}", benchmark_runs);
     println!("Verify output: {}", verify);
     println!();
@@ -123,6 +130,43 @@ fn sort_gensort(
         println!("Running benchmark for policy: {}", policy.name());
         println!("Parameters: {}", params);
         println!("{}", "=".repeat(80));
+
+        // Perform warmup runs
+        if warmup_runs > 0 {
+            println!("  Performing {} warmup run(s)...", warmup_runs);
+            for warmup in 1..=warmup_runs {
+                print!("    Warmup {}/{}: ", warmup, warmup_runs);
+
+                let temp_dir = dir.join(format!(
+                    "warmup_{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs()
+                ));
+                std::fs::create_dir_all(&temp_dir)?;
+
+                let gensort_input = Box::new(GenSortInputDirect::new(input)?);
+
+                let (runs, run_gen_stats) = ExternalSorter::run_generation(
+                    gensort_input.clone(),
+                    params.run_gen_threads as usize,
+                    (params.run_size_mb * 1024.0 * 1024.0) as usize,
+                    &temp_dir,
+                )?;
+
+                let (_merged_runs, merge_stats) =
+                    ExternalSorter::merge(runs, params.merge_threads as usize, &temp_dir)?;
+
+                println!(
+                    "{:.2}s",
+                    run_gen_stats.time_ms as f64 / 1000.0 + merge_stats.time_ms as f64 / 1000.0
+                );
+
+                // Remove temporary directory
+                std::fs::remove_dir_all(&temp_dir)?;
+            }
+            println!("  Warmup complete.\n");
+        }
 
         let mut accumulated_stats = RunStats::default();
         let mut valid_runs = 0;
@@ -159,6 +203,8 @@ fn sort_gensort(
                 run_generation_io_stats: run_gen_stats.io_stats,
                 merge_io_stats: merge_stats.io_stats,
             };
+
+            println!("{}", stats);
 
             // Accumulate stats
             accumulated_stats.total_time +=

@@ -70,11 +70,38 @@ pub struct SortStats {
     pub merge_io_stats: Option<IoStats>,
 }
 
+impl std::fmt::Display for SortStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // Clean display implementation
+        write!(f, "SortStats:\n")?;
+        write!(f, "  Number of runs: {}\n", self.num_runs)?;
+        write!(
+            f,
+            "  (R) time: {} ms\n",
+            self.run_generation_time_ms.unwrap_or(0)
+        )?;
+        write!(f, "  (M) time: {} ms\n", self.merge_time_ms.unwrap_or(0))?;
+        if let Some(io_stats) = &self.run_generation_io_stats {
+            write!(f, "  (R) I/O stats: {}\n", io_stats)?;
+        }
+        if let Some(io_stats) = &self.merge_io_stats {
+            write!(f, "  (M) I/O stats: {}\n", io_stats)?;
+        }
+        Ok(())
+    }
+}
+
 /// Information about a single run
 #[derive(Clone, Debug)]
 pub struct RunInfo {
     pub entries: usize,
     pub file_size: u64,
+}
+
+impl std::fmt::Display for RunInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "entries={}, file_size={}", self.entries, self.file_size)
+    }
 }
 
 // Implementations

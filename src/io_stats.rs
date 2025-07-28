@@ -89,3 +89,13 @@ impl IoStats {
         self.read_bytes + self.write_bytes
     }
 }
+
+impl std::fmt::Display for IoStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "I/O Stats: Read Ops: {}, Read Bytes: {}, Write Ops: {}, Write Bytes: {}",
+            self.read_ops, self.read_bytes, self.write_ops, self.write_bytes
+        )
+    }
+}
