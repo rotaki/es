@@ -234,8 +234,9 @@ fn sort_gensort(
                 accumulated_stats.merge_write_mb += io.write_bytes as f64 / 1_000_000.0;
             }
 
-            // Calculate imbalance factor if merge was parallelized
+            // Calculate imbalance factor
             if stats.merge_entry_num.len() > 1 {
+                // Multiple partitions - calculate actual imbalance
                 let min_entries = *stats.merge_entry_num.iter().min().unwrap_or(&0);
                 let max_entries = *stats.merge_entry_num.iter().max().unwrap_or(&0);
                 if min_entries > 0 {
@@ -243,6 +244,10 @@ fn sort_gensort(
                     accumulated_stats.imbalance_sum += imbalance;
                     accumulated_stats.imbalance_count += 1;
                 }
+            } else if stats.merge_entry_num.len() == 1 {
+                // Single partition - perfect balance
+                accumulated_stats.imbalance_sum += 1.0;
+                accumulated_stats.imbalance_count += 1;
             }
 
             valid_runs += 1;
@@ -288,11 +293,14 @@ fn sort_gensort(
         let total_write_mb = rg_write_mb + m_write_mb;
 
         // Calculate average imbalance factor
+        println!("Imbalance sum: {}", accumulated_stats.imbalance_sum);
+        println!("Imbalance count: {}", accumulated_stats.imbalance_count);
         let avg_imbalance_factor = if accumulated_stats.imbalance_count > 0 {
             accumulated_stats.imbalance_sum / accumulated_stats.imbalance_count as f64
         } else {
             1.0 // Perfect balance or single partition
         };
+        println!("Average imbalance factor: {:.2}x", avg_imbalance_factor);
 
         // Calculate read amplification
         let read_amplification = if rg_write_mb > 0.0 {
@@ -380,7 +388,7 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1} {:<12.2}",
+            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1} {:<12.5}",
             result.threads,
             result.memory_str,
             result.run_size_mb,
@@ -395,7 +403,7 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             result.read_mb,
             result.write_mb,
             if result.imbalance_factor > 1.0 {
-                format!("{:.3}x", result.imbalance_factor)
+                format!("{:.5}x", result.imbalance_factor)
             } else {
                 "N/A".to_string()
             },

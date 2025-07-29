@@ -10,9 +10,11 @@ TEMP_DIR="./temp_sort"
 WARMUP_RUNS=2
 BENCHMARK_RUNS=5
 # THREAD_SIZES=(8 16 32 64)  # Thread counts to test
-THREAD_SIZES=(32)  # Thread counts to test
+THREAD_SIZES=(8)  # Thread counts to test
 # MEMORY_SIZES=(1024 2048 4096 8192)  # Memory sizes in MB (1GB, 2GB, 4GB, 8GB)
-MEMORY_SIZES=(1024)  # Memory sizes in MB (1GB, 2GB, 4GB, 8GB)
+MEMORY_SIZES=(128)  # Memory sizes in MB (1GB, 2GB, 4GB, 8GB)
+# DATA_SIZES=(10 20 40 60 80 100)  # Data sizes in GiB
+DATA_SIZES=(2 4 6 8 10)  # Data sizes in GiB
 
 # Create results directory
 mkdir -p "$RESULTS_DIR"
@@ -67,13 +69,13 @@ echo "  Thread configurations: ${THREAD_SIZES[*]}"
 echo "  Warmup runs: $WARMUP_RUNS"
 echo "  Benchmark runs: $BENCHMARK_RUNS"
 echo "  Memory configurations: ${MEMORY_SIZES[*]} MB"
-echo "  Data sizes: 10GiB to 100GiB"
+echo "  Data sizes: ${DATA_SIZES[*]} GiB"
 echo ""
 
 # Check if data files exist
 echo "Checking for data files..."
 missing_files=0
-for size in 20 40 60 80 100; do
+for size in "${DATA_SIZES[@]}"; do
     input_file="$DATA_DIR/gensort_${size}GiB.data"
     if [ ! -f "$input_file" ]; then
         echo "  Missing: $input_file"
@@ -97,7 +99,7 @@ echo ""
 # Run benchmarks for each dataset size, memory configuration, and thread count
 start_time=$(date +%s)
 
-for size in 20 40 60 80 100; do
+for size in "${DATA_SIZES[@]}"; do
     input_file="$DATA_DIR/gensort_${size}GiB.data"
     
     for memory_mb in "${MEMORY_SIZES[@]}"; do

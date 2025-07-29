@@ -21,14 +21,19 @@ impl super::SortBuffer for SortBufferImpl {
         self.data.is_empty()
     }
 
-    fn append(&mut self, key: &[u8], value: &[u8]) -> bool {
+    fn has_space(&self, key: &[u8], value: &[u8]) -> bool {
+        let entry_size = key.len() + value.len() + std::mem::size_of::<u32>() * 2; // key and value lengths
+        self.memory_used + entry_size <= self.memory_limit
+    }
+
+    fn append(&mut self, key: Vec<u8>, value: Vec<u8>) -> bool {
         let entry_size = key.len() + value.len() + std::mem::size_of::<u32>() * 2; // key and value lengths
 
         if self.memory_used + entry_size > self.memory_limit {
             return false;
         }
 
-        self.data.push((key.to_vec(), value.to_vec()));
+        self.data.push((key, value));
         self.memory_used += entry_size;
         true
     }

@@ -9,7 +9,8 @@ pub trait Sorter {
 
 pub trait SortBuffer {
     fn is_empty(&self) -> bool;
-    fn append(&mut self, key: &[u8], value: &[u8]) -> bool;
+    fn has_space(&self, key: &[u8], value: &[u8]) -> bool;
+    fn append(&mut self, key: Vec<u8>, value: Vec<u8>) -> bool;
     fn sort(&mut self);
     fn drain(&mut self) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>;
     fn reset(&mut self);
@@ -230,6 +231,7 @@ pub mod csv_input_direct;
 pub mod file;
 pub mod gensort_input_direct;
 pub mod io_stats;
+pub mod kll_sketch;
 pub mod merge;
 pub mod order_preserving_encoding;
 pub mod parquet_input_direct;

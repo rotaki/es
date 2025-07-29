@@ -322,7 +322,7 @@ impl ExternalSorter {
                 );
 
                 for (key, value) in scanner {
-                    if !sort_buffer.append(&key, &value) {
+                    if !sort_buffer.has_space(&key, &value) {
                         // Buffer is full, sort and flush
                         sort_buffer.sort();
 
@@ -340,13 +340,11 @@ impl ExternalSorter {
                         local_runs.push(output_run);
 
                         sort_buffer.reset();
-                        if !sort_buffer.append(&key, &value) {
-                            panic!(
-                                "Single entry too large for sort buffer: key size {}, value size {}",
-                                key.len(),
-                                value.len()
-                            );
+                        if !sort_buffer.append(key, value) {
+                            panic!("Failed to append data to sort buffer, it should have space");
                         }
+                    } else {
+                        sort_buffer.append(key, value);
                     }
                 }
 
