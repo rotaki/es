@@ -142,8 +142,8 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
         Policy::MediumRunsBalancedParallelism => {
             // Policy 3: Medium runs with balanced parallelism at constraint intersection
             // T = M / sqrt(D × P)
-            let t = (m / (d * p).sqrt()) as f64;
-            let run_size = m / t as f64;
+            let t = m / (d * p).sqrt();
+            let run_size = m / t;
             let run_gen_threads = t.min(t_max);
             let merge_threads = t.min(t_max);
 
@@ -152,8 +152,8 @@ pub fn calculate_policy_parameters(policy: Policy, config: SortConfig) -> Policy
                 run_size_mb: run_size,
                 run_gen_threads,
                 merge_threads,
-                run_gen_memory_mb: run_size * t as f64,
-                merge_memory_mb: (d / run_size) * t as f64 * p,
+                run_gen_memory_mb: run_size * t,
+                merge_memory_mb: (d / run_size) * t * p,
             }
         }
 

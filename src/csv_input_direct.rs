@@ -1,12 +1,11 @@
 //! CSV Input implementation using Direct I/O with BufReader
 
 use crate::aligned_reader::AlignedReader;
-use crate::constants::open_file_with_direct_io;
+use crate::file::SharedFd;
 use crate::{IoStatsTracker, SortInput, file_size_fd, order_preserving_encoding::*};
 use arrow::datatypes::{DataType, Schema};
 use chrono::Datelike;
 use std::io::Seek;
-use std::os::fd::{IntoRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -83,18 +82,9 @@ impl CsvDirectConfig {
 
 /// CSV input reader using Direct I/O
 pub struct CsvInputDirect {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     config: CsvDirectConfig,
     file_size: u64,
-}
-
-impl Drop for CsvInputDirect {
-    fn drop(&mut self) {
-        // Close the file descriptor
-        unsafe {
-            libc::close(self.fd);
-        }
-    }
 }
 
 impl CsvInputDirect {
@@ -114,12 +104,15 @@ impl CsvInputDirect {
             return Err("At least one value column must be specified".to_string());
         }
 
-        let file = open_file_with_direct_io(path)
-            .map_err(|e| format!("Failed to open file: {}: {}", path.display(), e))?;
+        let fd = Arc::new(SharedFd::new_from_path(path).map_err(|e| {
+            format!(
+                "Failed to open file with Direct I/O: {}: {}",
+                path.display(),
+                e
+            )
+        })?);
 
-        let fd = file.into_raw_fd();
-
-        let file_size = file_size_fd(fd)
+        let file_size = file_size_fd(fd.as_raw_fd())
             .map_err(|e| format!("Failed to get file size: {}: {}", path.display(), e))?;
 
         if file_size == 0 {
@@ -160,7 +153,7 @@ impl SortInput for CsvInputDirect {
             }
 
             let scanner = CsvPartitionDirect {
-                fd: self.fd,
+                fd: self.fd.clone(),
                 config: self.config.clone(),
                 start_byte,
                 end_byte,
@@ -182,7 +175,7 @@ impl SortInput for CsvInputDirect {
 
 /// Partition iterator for CSV files using Direct I/O
 struct CsvPartitionDirect {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     config: CsvDirectConfig,
     start_byte: u64,
     end_byte: u64,
@@ -276,8 +269,8 @@ impl CsvPartitionDirect {
 
         // Always use ManagedAlignedReader with the required file_manager
         // Use the new constructor that handles start_byte properly
-        let mut managed_reader = AlignedReader::from_raw_fd_with_start_position(
-            self.fd,
+        let mut managed_reader = AlignedReader::from_fd_with_start_position(
+            self.fd.clone(),
             self.start_byte,
             self.io_stats.clone(),
         )

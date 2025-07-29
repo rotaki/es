@@ -1,6 +1,6 @@
 //! Parquet file input with Direct I/O support
 
-use crate::constants::open_file_with_direct_io;
+use crate::file::SharedFd;
 use crate::{
     IoStatsTracker, SortInput, aligned_reader::AlignedChunkReader, order_preserving_encoding::*,
 };
@@ -8,8 +8,8 @@ use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use std::os::fd::{IntoRawFd, RawFd};
 use std::path::Path;
+use std::sync::Arc;
 
 /// Configuration for Parquet Direct I/O reading
 #[derive(Clone)]
@@ -31,19 +31,10 @@ impl Default for ParquetDirectConfig {
 
 /// ParquetInputDirect reads key-value pairs from a Parquet file using Direct I/O
 pub struct ParquetInputDirect {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     config: ParquetDirectConfig,
     num_rows: usize,
     num_row_groups: usize,
-}
-
-impl Drop for ParquetInputDirect {
-    fn drop(&mut self) {
-        // Close the file descriptor
-        unsafe {
-            libc::close(self.fd);
-        }
-    }
 }
 
 impl ParquetInputDirect {
@@ -63,14 +54,16 @@ impl ParquetInputDirect {
             return Err("At least one value column must be specified".to_string());
         }
 
-        // Open file with read.
-        let file = open_file_with_direct_io(&path)
-            .map_err(|e| format!("Failed to open Parquet file: {}", e))?;
-
-        let fd = file.into_raw_fd();
+        let fd = Arc::new(SharedFd::new_from_path(&path).map_err(|e| {
+            format!(
+                "Failed to open file with Direct I/O: {}: {}",
+                path.display(),
+                e
+            )
+        })?);
 
         // Use ManagedAlignedChunkReader to read metadata
-        let chunk_reader = AlignedChunkReader::new(fd)?;
+        let chunk_reader = AlignedChunkReader::new(fd.clone())?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(chunk_reader)
             .map_err(|e| format!("Failed to create reader builder: {}", e))?;
 
@@ -148,7 +141,7 @@ impl SortInput for ParquetInputDirect {
             }
 
             let scanner = ParquetPartitionDirect {
-                fd: self.fd,
+                fd: self.fd.clone(),
                 config: self.config.clone(),
                 start_row_group: start_group,
                 end_row_group: end_group,
@@ -167,7 +160,7 @@ impl SortInput for ParquetInputDirect {
 
 /// Iterator over a partition of row groups using Direct I/O
 struct ParquetPartitionDirect {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     config: ParquetDirectConfig,
     start_row_group: usize,
     end_row_group: usize,
@@ -181,7 +174,7 @@ impl ParquetPartitionDirect {
     fn init_reader(&mut self) -> Option<()> {
         // Need to get file_manager - add it to ParquetPartitionDirect struct
         let chunk_reader =
-            AlignedChunkReader::new_with_tracker(self.fd, self.io_stats.clone()).ok()?;
+            AlignedChunkReader::new_with_tracker(self.fd.clone(), self.io_stats.clone()).ok()?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(chunk_reader).ok()?;
 

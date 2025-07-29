@@ -1,8 +1,46 @@
 use libc::{c_void, fstat, off_t, pread, pwrite};
-use std::io;
 use std::os::unix::io::RawFd;
+use std::path::Path;
+use std::{io, os::fd::IntoRawFd};
 
-use crate::constants::DIRECT_IO_ALIGNMENT;
+use crate::constants::{DIRECT_IO_ALIGNMENT, open_file_with_direct_io};
+
+pub struct SharedFd {
+    fd: RawFd,
+}
+
+impl From<RawFd> for SharedFd {
+    fn from(fd: RawFd) -> Self {
+        Self { fd }
+    }
+}
+
+impl SharedFd {
+    /// Create a new SharedFd from a raw file descriptor
+    pub fn new(fd: RawFd) -> Self {
+        Self { fd }
+    }
+
+    pub fn new_from_path(path: impl AsRef<Path>) -> io::Result<Self> {
+        let file = open_file_with_direct_io(path.as_ref())?;
+        let fd = file.into_raw_fd();
+        Ok(Self { fd })
+    }
+
+    /// Get the raw file descriptor
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+impl Drop for SharedFd {
+    fn drop(&mut self) {
+        // Close the file descriptor when SharedFd is dropped
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
 
 /// Get the size of a file using its raw file descriptor
 pub fn file_size_fd(fd: RawFd) -> io::Result<u64> {

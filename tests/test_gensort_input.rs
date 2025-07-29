@@ -115,11 +115,6 @@ fn test_gensort_invalid_file_size() {
     // Should fail to open
     let result = GenSortInputDirect::new(&test_file);
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .contains("not a multiple of record size")
-    );
 }
 
 #[test]

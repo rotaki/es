@@ -1,10 +1,9 @@
 use crate::aligned_reader::AlignedReader;
-use crate::constants::open_file_with_direct_io;
+use crate::file::SharedFd;
 use crate::{IoStatsTracker, SortInput, file_size_fd};
 use std::io::Read;
-use std::os::fd::RawFd;
-use std::os::unix::io::IntoRawFd;
 use std::path::Path;
+use std::sync::Arc;
 
 // GenSort format constants
 const KEY_SIZE: usize = 10;
@@ -12,9 +11,9 @@ const PAYLOAD_SIZE: usize = 90;
 const RECORD_SIZE: usize = KEY_SIZE + PAYLOAD_SIZE;
 
 /// Direct I/O reader for GenSort binary format
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GenSortInputDirect {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     num_records: usize,
 }
 
@@ -26,11 +25,15 @@ impl GenSortInputDirect {
             return Err(format!("File does not exist: {:?}", path));
         }
 
-        let fd = open_file_with_direct_io(&path)
-            .map_err(|e| format!("Failed to open file {:?}: {}", path, e))?
-            .into_raw_fd();
+        let fd = Arc::new(SharedFd::new_from_path(&path).map_err(|e| {
+            format!(
+                "Failed to open file with Direct I/O: {}: {}",
+                path.display(),
+                e
+            )
+        })?);
 
-        let file_size = file_size_fd(fd)
+        let file_size = file_size_fd(fd.as_raw_fd())
             .map_err(|e| format!("Failed to get file size for {:?}: {}", path, e))?;
 
         // Verify file size is a multiple of record size
@@ -51,7 +54,7 @@ impl GenSortInputDirect {
     }
 
     pub fn file_size(&self) -> Result<u64, String> {
-        file_size_fd(self.fd).map_err(|e| format!("Failed to get file size: {}", e))
+        file_size_fd(self.fd.as_raw_fd()).map_err(|e| format!("Failed to get file size: {}", e))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -79,8 +82,12 @@ impl SortInput for GenSortInputDirect {
             }
 
             let end_record = ((scanner_id + 1) * records_per_scanner).min(self.num_records);
-            let scanner =
-                GenSortScanner::new(self.fd, start_record, end_record, io_tracker.clone());
+            let scanner = GenSortScanner::new(
+                self.fd.clone(),
+                start_record,
+                end_record,
+                io_tracker.clone(),
+            );
 
             match scanner {
                 Ok(s) => scanners
@@ -105,7 +112,7 @@ struct GenSortScanner {
 
 impl GenSortScanner {
     fn new(
-        fd: RawFd,
+        fd: Arc<SharedFd>,
         start_record: usize,
         end_record: usize,
         io_tracker: Option<IoStatsTracker>,
@@ -113,10 +120,10 @@ impl GenSortScanner {
         // Open file with Direct I/O
         // Create aligned reader with optional IO tracking
         let mut reader = if let Some(tracker) = io_tracker {
-            AlignedReader::from_raw_fd_with_tracker(fd, Some(tracker))
+            AlignedReader::from_fd_with_tracer(fd, Some(tracker))
                 .map_err(|e| format!("Failed to create aligned reader: {}", e))?
         } else {
-            AlignedReader::from_raw_fd(fd)
+            AlignedReader::from_fd(fd)
                 .map_err(|e| format!("Failed to create aligned reader: {}", e))?
         };
 

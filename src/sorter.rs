@@ -1,11 +1,10 @@
-use std::os::fd::IntoRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
 use crate::aligned_writer::AlignedWriter;
-use crate::constants::open_file_with_direct_io;
+use crate::file::SharedFd;
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;
@@ -313,11 +312,12 @@ impl ExternalSorter {
                 let mut sort_buffer = SortBufferImpl::new(per_thread_mem);
 
                 let run_path = dir.join(format!("intermediate_{}.dat", thread_id));
-                let fd = open_file_with_direct_io(&run_path)
-                    .expect("Failed to open run file with direct IO")
-                    .into_raw_fd();
+                let fd = Arc::new(
+                    SharedFd::new_from_path(&run_path)
+                        .expect("Failed to open run file with Direct I/O"),
+                );
                 let mut run_writer = Option::Some(
-                    AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
+                    AlignedWriter::from_fd_with_tracker(fd, Some((*io_tracker).clone()))
                         .expect("Failed to create run writer"),
                 );
 
@@ -503,12 +503,12 @@ impl ExternalSorter {
 
                 // Create output run for this thread
                 let run_path = dir.join(format!("merge_output_{}.dat", thread_id));
-                let fd = open_file_with_direct_io(&run_path)
-                    .expect("Failed to open run file with direct IO")
-                    .into_raw_fd();
-                let writer =
-                    AlignedWriter::from_raw_fd_with_tracker(fd, Some((*io_tracker).clone()))
-                        .expect("Failed to create run writer");
+                let fd = Arc::new(
+                    SharedFd::new_from_path(&run_path)
+                        .expect("Failed to open merge output file with Direct I/O"),
+                );
+                let writer = AlignedWriter::from_fd_with_tracker(fd, Some((*io_tracker).clone()))
+                    .expect("Failed to create run writer");
                 let mut output_run =
                     RunImpl::from_writer(writer).expect("Failed to create merge output run");
 

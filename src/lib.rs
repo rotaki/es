@@ -74,19 +74,19 @@ pub struct SortStats {
 impl std::fmt::Display for SortStats {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // Clean display implementation
-        write!(f, "SortStats:\n")?;
-        write!(f, "  Number of runs: {}\n", self.num_runs)?;
-        write!(
+        writeln!(f, "SortStats:")?;
+        writeln!(f, "  Number of runs: {}", self.num_runs)?;
+        writeln!(
             f,
-            "  (R) time: {} ms\n",
+            "  (R) time: {} ms",
             self.run_generation_time_ms.unwrap_or(0)
         )?;
-        write!(f, "  (M) time: {} ms\n", self.merge_time_ms.unwrap_or(0))?;
+        writeln!(f, "  (M) time: {} ms", self.merge_time_ms.unwrap_or(0))?;
         if let Some(io_stats) = &self.run_generation_io_stats {
-            write!(f, "  (R) I/O stats: {}\n", io_stats)?;
+            writeln!(f, "  (R) I/O stats: {}", io_stats)?;
         }
         if let Some(io_stats) = &self.merge_io_stats {
-            write!(f, "  (M) I/O stats: {}\n", io_stats)?;
+            writeln!(f, "  (M) I/O stats: {}", io_stats)?;
         }
 
         // Display read amplification (sparse indexing effectiveness)
@@ -97,45 +97,45 @@ impl std::fmt::Display for SortStats {
                 let read_amplification = merge_io.read_bytes as f64 / run_gen_io.write_bytes as f64;
                 let excess_read_pct = (read_amplification - 1.0) * 100.0;
 
-                write!(f, "  Read amplification:\n")?;
-                write!(
+                writeln!(f, "  Read amplification:")?;
+                writeln!(
                     f,
-                    "    Run generation writes: {} bytes ({:.2} GB)\n",
+                    "    Run generation writes: {} bytes ({:.2} GB)",
                     run_gen_io.write_bytes,
                     run_gen_io.write_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
                 )?;
-                write!(
+                writeln!(
                     f,
-                    "    Merge phase reads: {} bytes ({:.2} GB)\n",
+                    "    Merge phase reads: {} bytes ({:.2} GB)",
                     merge_io.read_bytes,
                     merge_io.read_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
                 )?;
-                write!(
+                writeln!(
                     f,
-                    "    Read amplification factor: {:.2}x\n",
+                    "    Read amplification factor: {:.2}x",
                     read_amplification
                 )?;
                 if excess_read_pct > 0.0 {
-                    write!(
+                    writeln!(
                         f,
-                        "    Excess reads: {:.1}% (sparse indexing overhead)\n",
+                        "    Excess reads: {:.1}% (sparse indexing overhead)",
                         excess_read_pct
                     )?;
                 } else if excess_read_pct < 0.0 {
-                    write!(
+                    writeln!(
                         f,
-                        "    Read reduction: {:.1}% (possible data compression or skipping)\n",
+                        "    Read reduction: {:.1}% (possible data compression or skipping)",
                         -excess_read_pct
                     )?;
                 } else {
-                    write!(f, "    Perfect read efficiency (1.0x)\n")?;
+                    writeln!(f, "    Perfect read efficiency (1.0x)")?;
                 }
             }
         }
 
         // Display partition imbalance if merge was parallelized
         if self.merge_entry_num.len() > 1 {
-            write!(f, "  Partition imbalance:\n")?;
+            writeln!(f, "  Partition imbalance:")?;
 
             let total_entries: u64 = self.merge_entry_num.iter().sum();
             let avg_entries = total_entries as f64 / self.merge_entry_num.len() as f64;
@@ -168,12 +168,12 @@ impl std::fmt::Display for SortStats {
                 0.0
             };
 
-            write!(f, "    Partitions: {}\n", self.merge_entry_num.len())?;
-            write!(f, "    Total entries: {}\n", total_entries)?;
-            write!(f, "    Avg per partition: {:.0}\n", avg_entries)?;
-            write!(
+            writeln!(f, "    Partitions: {}", self.merge_entry_num.len())?;
+            writeln!(f, "    Total entries: {}", total_entries)?;
+            writeln!(f, "    Avg per partition: {:.0}", avg_entries)?;
+            writeln!(
                 f,
-                "    Min entries: {} ({:.1}% of avg)\n",
+                "    Min entries: {} ({:.1}% of avg)",
                 min_entries,
                 if avg_entries > 0.0 {
                     (min_entries as f64 / avg_entries) * 100.0
@@ -181,9 +181,9 @@ impl std::fmt::Display for SortStats {
                     0.0
                 }
             )?;
-            write!(
+            writeln!(
                 f,
-                "    Max entries: {} ({:.1}% of avg)\n",
+                "    Max entries: {} ({:.1}% of avg)",
                 max_entries,
                 if avg_entries > 0.0 {
                     (max_entries as f64 / avg_entries) * 100.0
@@ -191,17 +191,17 @@ impl std::fmt::Display for SortStats {
                     0.0
                 }
             )?;
-            write!(f, "    Std deviation: {:.0}\n", std_dev)?;
-            write!(f, "    Coefficient of variation: {:.1}%\n", cv)?;
-            write!(
+            writeln!(f, "    Std deviation: {:.0}", std_dev)?;
+            writeln!(f, "    Coefficient of variation: {:.1}%", cv)?;
+            writeln!(
                 f,
-                "    Imbalance factor (max/min): {:.2}x\n",
+                "    Imbalance factor (max/min): {:.2}x",
                 imbalance_factor
             )?;
 
             // Show distribution if not too many partitions
             if self.merge_entry_num.len() <= 32 {
-                write!(f, "    Distribution: {:?}\n", self.merge_entry_num)?;
+                writeln!(f, "    Distribution: {:?}", self.merge_entry_num)?;
             }
         }
 
@@ -231,7 +231,6 @@ pub mod csv_input_direct;
 pub mod file;
 pub mod gensort_input_direct;
 pub mod io_stats;
-pub mod kll_sketch;
 pub mod merge;
 pub mod order_preserving_encoding;
 pub mod parquet_input_direct;

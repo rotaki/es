@@ -1,15 +1,15 @@
 use std::io::{self, Write};
-use std::os::unix::io::RawFd;
+use std::sync::Arc;
 
 use crate::aligned_buffer::AlignedBuffer;
 use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
-use crate::file::pwrite_fd;
+use crate::file::{SharedFd, pwrite_fd};
 use crate::io_stats::IoStatsTracker;
 
 /// AlignedWriter that uses GlobalFileManager for file operations
 pub struct AlignedWriter {
     /// Raw file descriptor for direct operations
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     /// Aligned buffer for writing
     buffer: AlignedBuffer,
     /// Current position in the file (aligned)
@@ -23,7 +23,7 @@ pub struct AlignedWriter {
 }
 
 impl AlignedWriter {
-    pub fn from_raw_fd(fd: RawFd) -> io::Result<Self> {
+    pub fn from_fd(fd: Arc<SharedFd>) -> io::Result<Self> {
         Ok(Self {
             fd,
             buffer: AlignedBuffer::new(DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT)?,
@@ -35,8 +35,8 @@ impl AlignedWriter {
     }
 
     /// Create a new ManagedAlignedWriter with specified buffer size and I/O tracker
-    pub fn from_raw_fd_with_tracker(
-        fd: RawFd,
+    pub fn from_fd_with_tracker(
+        fd: Arc<SharedFd>,
         tracker: Option<IoStatsTracker>,
     ) -> io::Result<Self> {
         Ok(Self {
@@ -49,8 +49,8 @@ impl AlignedWriter {
         })
     }
 
-    pub fn get_fd(&self) -> RawFd {
-        self.fd
+    pub fn get_fd(&self) -> Arc<SharedFd> {
+        self.fd.clone()
     }
 
     /// Flush the internal buffer to the file
@@ -69,7 +69,7 @@ impl AlignedWriter {
 
         // Write the aligned buffer using the raw file descriptor
         let written = pwrite_fd(
-            self.fd,
+            self.fd.as_raw_fd(),
             &self.buffer.as_slice()[..write_len],
             self.file_offset,
         )?;
@@ -144,26 +144,24 @@ impl Drop for AlignedWriter {
 mod tests {
     use super::*;
     use crate::aligned_reader::AlignedReader;
-    use crate::constants::open_file_with_direct_io;
+    
     use std::fs;
     use std::io::Read;
-    use std::os::fd::IntoRawFd;
+    
     use std::path::Path;
     use tempfile::tempdir;
 
-    fn create_test_file(dir: &Path, name: &str) -> io::Result<RawFd> {
+    fn create_test_file(dir: &Path, name: &str) -> io::Result<Arc<SharedFd>> {
         let file_path = dir.join(name);
-        let file = fs::File::create(&file_path)?;
-        drop(file);
-        let file = open_file_with_direct_io(&file_path)?;
-        Ok(file.into_raw_fd())
+        let fd = SharedFd::new_from_path(&file_path)?;
+        Ok(Arc::new(fd))
     }
 
     #[test]
     fn test_basic_write() {
         let dir = tempdir().unwrap();
         let fd = create_test_file(dir.path(), "test.dat").unwrap();
-        let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+        let mut writer = AlignedWriter::from_fd(fd).unwrap();
         let data = b"Hello, World!";
         writer.write_all(data).unwrap();
         writer.flush().unwrap();
@@ -182,13 +180,13 @@ mod tests {
         let test_data: Vec<u8> = (0..200_000).map(|i| (i % 256) as u8).collect();
 
         {
-            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            let mut writer = AlignedWriter::from_fd(fd.clone()).unwrap();
             writer.write_all(&test_data).unwrap();
             writer.flush().unwrap();
         }
 
         // Verify using ManagedAlignedReader
-        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+        let mut reader = AlignedReader::from_fd(fd).unwrap();
         let mut read_data = vec![0u8; test_data.len()];
         reader.read_exact(&mut read_data).unwrap();
 
@@ -201,8 +199,8 @@ mod tests {
         let fd1 = create_test_file(dir.path(), "file1.dat").unwrap();
         let fd2 = create_test_file(dir.path(), "file2.dat").unwrap();
 
-        let mut writer1 = AlignedWriter::from_raw_fd(fd1).unwrap();
-        let mut writer2 = AlignedWriter::from_raw_fd(fd2).unwrap();
+        let mut writer1 = AlignedWriter::from_fd(fd1).unwrap();
+        let mut writer2 = AlignedWriter::from_fd(fd2).unwrap();
 
         writer1.write_all(b"File 1 content").unwrap();
         writer2.write_all(b"File 2 content").unwrap();
@@ -222,7 +220,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let fd = create_test_file(dir.path(), "position_test.dat").unwrap();
 
-        let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+        let mut writer = AlignedWriter::from_fd(fd).unwrap();
 
         assert_eq!(writer.position(), 0);
 
@@ -242,7 +240,7 @@ mod tests {
         let fd = create_test_file(dir.path(), "test.dat").unwrap();
 
         {
-            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            let mut writer = AlignedWriter::from_fd(fd.clone()).unwrap();
 
             // Write pattern: small, large, small
             writer.write_all(b"small").unwrap();
@@ -255,7 +253,7 @@ mod tests {
         }
 
         // Verify pattern
-        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+        let mut reader = AlignedReader::from_fd(fd).unwrap();
         let mut buf = vec![0u8; 5];
         reader.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"small");
@@ -275,7 +273,7 @@ mod tests {
         let fd = create_test_file(dir.path(), "auto_flush_test.dat").unwrap();
 
         {
-            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            let mut writer = AlignedWriter::from_fd(fd).unwrap();
             writer.write_all(b"Auto flush test").unwrap();
             // No explicit flush - should flush on drop
         }
@@ -292,14 +290,14 @@ mod tests {
 
         // First write some initial data
         {
-            let mut writer = AlignedWriter::from_raw_fd(fd).unwrap();
+            let mut writer = AlignedWriter::from_fd(fd.clone()).unwrap();
             let data: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
             writer.write_all(&data).unwrap();
             writer.flush().unwrap();
         }
 
         // Now create a reader and writer using same file manager
-        let mut reader = AlignedReader::from_raw_fd(fd).unwrap();
+        let mut reader = AlignedReader::from_fd(fd).unwrap();
 
         // Read first part
         let mut buf = vec![0u8; 1000];
@@ -317,8 +315,7 @@ mod tests {
 
         let tracker = crate::io_stats::IoStatsTracker::new();
 
-        let mut writer =
-            AlignedWriter::from_raw_fd_with_tracker(fd, Some(tracker.clone())).unwrap();
+        let mut writer = AlignedWriter::from_fd_with_tracker(fd, Some(tracker.clone())).unwrap();
 
         // Write some data
         let data = vec![b'X'; 10_000];

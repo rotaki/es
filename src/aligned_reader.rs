@@ -1,5 +1,5 @@
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::unix::io::RawFd;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use parquet::errors::Result as ParquetResult;
@@ -9,14 +9,14 @@ use crate::aligned_buffer::AlignedBuffer;
 use crate::constants::{
     DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_down, align_up, offset_within_block,
 };
-use crate::file::pread_fd;
+use crate::file::{SharedFd, pread_fd};
 use crate::file_size_fd;
 use crate::io_stats::IoStatsTracker;
 
 /// AlignedReader that uses GlobalFileManager for file operations
 pub struct AlignedReader {
     /// Raw file descriptor for direct operations
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     /// Aligned buffer for reading
     buffer: AlignedBuffer,
     /// Current position in the file (aligned)
@@ -34,24 +34,24 @@ pub struct AlignedReader {
 }
 
 impl AlignedReader {
-    pub fn from_raw_fd(fd: RawFd) -> io::Result<Self> {
-        Self::from_raw_fd_with_tracker(fd, None)
+    pub fn from_fd(fd: Arc<SharedFd>) -> io::Result<Self> {
+        Self::from_fd_with_tracer(fd, None)
     }
 
-    pub fn from_raw_fd_with_tracker(
-        fd: RawFd,
+    pub fn from_fd_with_tracer(
+        fd: Arc<SharedFd>,
         tracker: Option<IoStatsTracker>,
     ) -> io::Result<Self> {
-        Self::from_raw_fd_with_start_position(fd, 0, tracker)
+        Self::from_fd_with_start_position(fd, 0, tracker)
     }
 
-    pub fn from_raw_fd_with_start_position(
-        fd: RawFd,
+    pub fn from_fd_with_start_position(
+        fd: Arc<SharedFd>,
         start_byte: u64,
         tracker: Option<IoStatsTracker>,
     ) -> io::Result<Self> {
         // Calculate aligned position and skip bytes
-        let file_size = file_size_fd(fd).map_err(io::Error::other)?;
+        let file_size = file_size_fd(fd.as_raw_fd()).map_err(io::Error::other)?;
         let aligned_pos = align_down(start_byte, DIRECT_IO_ALIGNMENT as u64);
         let skip_bytes = offset_within_block(start_byte, DIRECT_IO_ALIGNMENT as u64);
 
@@ -80,7 +80,11 @@ impl AlignedReader {
     /// Otherwise, they are updated to reflect the new state
     fn refill_buffer(&mut self) -> io::Result<usize> {
         // Read aligned data from file using the raw file descriptor
-        let bytes_read = pread_fd(self.fd, self.buffer.as_mut_slice(), self.file_offset)?;
+        let bytes_read = pread_fd(
+            self.fd.as_raw_fd(),
+            self.buffer.as_mut_slice(),
+            self.file_offset,
+        )?;
 
         // Update I/O statistics if tracker is present
         if let Some(ref tracker) = self.io_tracker {
@@ -317,22 +321,25 @@ impl Seek for AlignedReader {
 
 /// A wrapper around a file path that implements ChunkReader for Direct I/O using GlobalFileManager
 pub struct AlignedChunkReader {
-    /// Raw file descriptor for direct operations
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     file_size: u64,
     io_tracker: Option<IoStatsTracker>,
 }
 
 impl AlignedChunkReader {
-    pub fn new(fd: RawFd) -> Result<Self, String> {
+    pub fn new(fd: Arc<SharedFd>) -> Result<Self, String> {
         Self::new_with_tracker(fd, None)
     }
 
-    pub fn new_with_tracker(fd: RawFd, tracker: Option<IoStatsTracker>) -> Result<Self, String> {
-        let file_size = file_size_fd(fd).map_err(|e| format!("Failed to get file size: {}", e))?;
+    pub fn new_with_tracker(
+        fd: Arc<SharedFd>,
+        tracker: Option<IoStatsTracker>,
+    ) -> Result<Self, String> {
+        let file_size =
+            file_size_fd(fd.as_raw_fd()).map_err(|e| format!("Failed to get file size: {}", e))?;
 
         Ok(Self {
-            fd,
+            fd: fd.clone(),
             file_size,
             io_tracker: tracker,
         })
@@ -350,9 +357,12 @@ impl ChunkReader for AlignedChunkReader {
 
     fn get_read(&self, start: u64) -> ParquetResult<Self::T> {
         // Create a new reader starting at the specified position
-        let reader =
-            AlignedReader::from_raw_fd_with_start_position(self.fd, start, self.io_tracker.clone())
-                .map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
+        let reader = AlignedReader::from_fd_with_start_position(
+            self.fd.clone(),
+            start,
+            self.io_tracker.clone(),
+        )
+        .map_err(|e| parquet::errors::ParquetError::General(e.to_string()))?;
 
         Ok(reader)
     }
@@ -369,16 +379,17 @@ impl ChunkReader for AlignedChunkReader {
 
 #[cfg(test)]
 mod tests {
-    use crate::constants::open_file_with_direct_io;
-
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use std::os::fd::{AsRawFd, IntoRawFd};
     use std::path::Path;
     use tempfile::TempDir;
 
-    fn create_test_file(dir: &Path, name: &str, size: usize) -> io::Result<(RawFd, Vec<u8>)> {
+    fn create_test_file(
+        dir: &Path,
+        name: &str,
+        size: usize,
+    ) -> io::Result<(Arc<SharedFd>, Vec<u8>)> {
         let path = dir.join(name);
         let mut data = vec![0u8; size];
         for i in 0..size {
@@ -391,20 +402,22 @@ mod tests {
         file.sync_all()?;
         drop(file); // Close the write file
 
-        let file = open_file_with_direct_io(&path)?;
-        let fd = file.into_raw_fd(); // Transfer ownership to get raw fd
+        let fd = Arc::new(SharedFd::new_from_path(path)?);
         Ok((fd, data))
     }
 
-    fn create_test_file_with_data(dir: &Path, name: &str, data: &[u8]) -> io::Result<RawFd> {
+    fn create_test_file_with_data(
+        dir: &Path,
+        name: &str,
+        data: &[u8],
+    ) -> io::Result<Arc<SharedFd>> {
         let path = dir.join(name);
         let mut file = File::create(&path)?;
         file.write_all(data)?;
         file.sync_all()?;
         drop(file);
 
-        let file = open_file_with_direct_io(&path)?;
-        let fd = file.into_raw_fd();
+        let fd = Arc::new(SharedFd::new_from_path(path)?);
         Ok(fd)
     }
 
@@ -414,8 +427,7 @@ mod tests {
         let test_size = 8192;
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", test_size).unwrap();
 
-        println!("File descriptor: {}", file.as_raw_fd());
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut buf = vec![0u8; test_size];
         let bytes_read = reader.read(&mut buf).unwrap();
@@ -433,7 +445,7 @@ mod tests {
         let read = pread_fd(file.as_raw_fd(), &mut content, 0).unwrap();
         assert_eq!(read, 8192);
 
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Read in small chunks
         let chunk_size = 100;
@@ -457,7 +469,7 @@ mod tests {
         let test_size = 8192;
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", test_size).unwrap();
 
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Seek to middle
         reader.seek(4096).unwrap();
@@ -482,7 +494,7 @@ mod tests {
     fn test_position_tracking() {
         let temp_dir = TempDir::new().unwrap();
         let (file, _) = create_test_file(temp_dir.path(), "test.dat", 8192).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         assert_eq!(reader.position(), 0);
 
@@ -506,8 +518,8 @@ mod tests {
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", 8192).unwrap();
 
         // Create two readers for the same file
-        let mut reader1 = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
-        let mut reader2 = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader1 = AlignedReader::from_fd(file.clone()).unwrap();
+        let mut reader2 = AlignedReader::from_fd(file).unwrap();
 
         // Read from different positions
         reader1.seek(0).unwrap();
@@ -527,7 +539,7 @@ mod tests {
     fn test_eof_handling() {
         let temp_dir = TempDir::new().unwrap();
         let (file, _) = create_test_file(temp_dir.path(), "test.dat", 1024).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Seek near end
         reader.seek(1000).unwrap();
@@ -546,7 +558,7 @@ mod tests {
     fn test_seek_to_non_aligned_offsets() {
         let temp_dir = TempDir::new().unwrap();
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", 8192).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Test various non-aligned offsets
         let test_offsets = vec![
@@ -576,7 +588,7 @@ mod tests {
     fn test_seek_non_aligned_read_across_boundaries() {
         let temp_dir = TempDir::new().unwrap();
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", 8192).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Seek to non-aligned position just before an alignment boundary
         reader.seek(510).unwrap();
@@ -599,7 +611,7 @@ mod tests {
     fn test_multiple_seeks_and_reads() {
         let temp_dir = TempDir::new().unwrap();
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", 8192).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Perform multiple seeks and reads
         let operations = vec![
@@ -630,7 +642,7 @@ mod tests {
         let file = create_test_file_with_data(temp_dir.path(), "test.dat", test_data).unwrap();
 
         // Test skipping from middle of first line
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
         reader.seek(5).unwrap(); // Position at " line"
 
         let skipped = reader.skip_to_newline().unwrap();
@@ -648,7 +660,7 @@ mod tests {
 
         let test_data = b"Line1\nLine2\nLine3\n";
         let file = create_test_file_with_data(temp_dir.path(), "test.dat", test_data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Seek exactly to newline
         reader.seek(5).unwrap(); // Position at '\n'
@@ -670,7 +682,7 @@ mod tests {
         let mut test_data = vec![b'X'; 1024]; // Exactly 2 aligned blocks
         test_data[1023] = b'Y'; // Mark the last byte
         let file = create_test_file_with_data(temp_dir.path(), "test.dat", &test_data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let skipped = reader.skip_to_newline().unwrap();
         // With Direct I/O, we might read aligned blocks, but position tracking should be accurate
@@ -691,7 +703,7 @@ mod tests {
         let mut test_data = vec![b'X'; 100_000];
         test_data[95_000] = b'\n'; // Put newline far into the data
         let file = create_test_file_with_data(temp_dir.path(), "test.dat", &test_data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let skipped = reader.skip_to_newline().unwrap();
         assert_eq!(skipped, 95_001); // Up to and including the newline
@@ -705,7 +717,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_size = 8192;
         let (file, test_data) = create_test_file(temp_dir.path(), "test.dat", test_size).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Test SeekFrom::Start - use Seek trait explicitly
         let pos = <AlignedReader as Seek>::seek(&mut reader, SeekFrom::Start(1000)).unwrap();
@@ -739,9 +751,7 @@ mod tests {
         let test_size = 100 * 1024; // 100KB to ensure multiple reads
         let (file, _) = create_test_file(temp_dir.path(), "test.dat", test_size).unwrap();
         let tracker = IoStatsTracker::new();
-        let mut reader =
-            AlignedReader::from_raw_fd_with_tracker(file.as_raw_fd(), Some(tracker.clone()))
-                .unwrap();
+        let mut reader = AlignedReader::from_fd_with_tracer(file, Some(tracker.clone())).unwrap();
 
         // Read some data
         let mut buf = vec![0u8; 1000];
@@ -779,7 +789,7 @@ mod tests {
         // Create test data that's already aligned
         let test_data: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
         let file = create_test_file_with_data(temp_dir.path(), "test.dat", &test_data).unwrap();
-        let chunk_reader = AlignedChunkReader::new(file.as_raw_fd()).unwrap();
+        let chunk_reader = AlignedChunkReader::new(file).unwrap();
 
         assert_eq!(chunk_reader.len(), 1024);
 
@@ -804,7 +814,7 @@ mod tests {
         let tracker = IoStatsTracker::new();
 
         let chunk_reader =
-            AlignedChunkReader::new_with_tracker(file.as_raw_fd(), Some(tracker.clone())).unwrap();
+            AlignedChunkReader::new_with_tracker(file, Some(tracker.clone())).unwrap();
 
         // Read some chunks
         let _ = chunk_reader.get_bytes(0, 1000).unwrap();
@@ -824,7 +834,7 @@ mod tests {
         let file =
             create_test_file_with_data(temp_dir.path(), "test_lines.dat", content.as_bytes())
                 .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
 
@@ -860,7 +870,7 @@ mod tests {
         let file =
             create_test_file_with_data(temp_dir.path(), "test_no_newline.dat", content.as_bytes())
                 .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
         let bytes = reader.read_line(&mut line).unwrap();
@@ -883,7 +893,7 @@ mod tests {
         let file =
             create_test_file_with_data(temp_dir.path(), "test_long_lines.dat", content.as_bytes())
                 .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
 
@@ -908,7 +918,7 @@ mod tests {
         let file =
             create_test_file_with_data(temp_dir.path(), "test_empty_lines.dat", content.as_bytes())
                 .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
 
@@ -944,7 +954,7 @@ mod tests {
         let content = "Line 1\r\nLine 2\r\n";
         let file = create_test_file_with_data(temp_dir.path(), "test_crlf.dat", content.as_bytes())
             .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
 
@@ -982,7 +992,7 @@ mod tests {
                 create_test_file_with_data(temp_dir.path(), &format!("test_{}.dat", idx), &data)
                     .unwrap();
 
-            let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+            let mut reader = AlignedReader::from_fd(file).unwrap();
             let mut buf = vec![0u8; size + 100]; // Buffer larger than file
 
             let bytes_read = reader.read(&mut buf).unwrap();
@@ -1004,7 +1014,7 @@ mod tests {
     fn test_empty_file() {
         let temp_dir = TempDir::new().unwrap();
         let file = create_test_file_with_data(temp_dir.path(), "empty.dat", &[]).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Test read
         let mut buf = vec![0u8; 100];
@@ -1029,7 +1039,7 @@ mod tests {
         let data = vec![b'X'; 100];
         let file =
             create_test_file_with_data(temp_dir.path(), "test_refill_eof.dat", &data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Read all data
         let mut buf = vec![0u8; 200];
@@ -1053,7 +1063,7 @@ mod tests {
         let data = vec![b'A'; 1000];
         let file =
             create_test_file_with_data(temp_dir.path(), "test_seek_beyond.dat", &data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Seek beyond EOF
         reader.seek(2000).unwrap();
@@ -1081,7 +1091,7 @@ mod tests {
         // Create file larger than buffer
         let data: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
         let file = create_test_file_with_data(temp_dir.path(), "test_position.dat", &data).unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         // Read small amount
         let mut buf = vec![0u8; 100];
@@ -1109,7 +1119,7 @@ mod tests {
         let content = "Hello, 世界!\nЗдравствуй, мир!\n🦀 Rust 🦀\n";
         let file = create_test_file_with_data(temp_dir.path(), "test_utf8.dat", content.as_bytes())
             .unwrap();
-        let mut reader = AlignedReader::from_raw_fd(file.as_raw_fd()).unwrap();
+        let mut reader = AlignedReader::from_fd(file).unwrap();
 
         let mut line = String::new();
 
@@ -1141,8 +1151,8 @@ mod tests {
         let test_positions = vec![0, 1, 511, 512, 512, 63999, 64000, 64001, 99999, 100000];
 
         for start_pos in test_positions {
-            let mut reader = AlignedReader::from_raw_fd_with_start_position(
-                file.as_raw_fd(),
+            let mut reader = AlignedReader::from_fd_with_start_position(
+                file.clone(),
                 start_pos,
                 None, // No IoStatsTracker for this test
             )

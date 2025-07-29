@@ -4,9 +4,10 @@ use rand::{Rng, SeedableRng};
 use crate::aligned_reader::AlignedReader;
 use crate::aligned_writer::AlignedWriter;
 use crate::constants::{PAGE_SIZE, align_down};
+use crate::file::SharedFd;
 use crate::io_stats::IoStatsTracker;
 use std::io::{Read, Write};
-use std::os::fd::RawFd;
+use std::sync::Arc;
 
 // Sparse index entry
 #[derive(Debug, Clone)]
@@ -18,7 +19,7 @@ pub struct IndexEntry {
 
 // File-based run implementation with direct I/O
 pub struct RunImpl {
-    fd: RawFd,
+    fd: Arc<SharedFd>,
     writer: Option<AlignedWriter>,
     total_entries: usize,
     start_bytes: usize,
@@ -157,9 +158,9 @@ impl super::Run for RunImpl {
 
         // Open for reading with direct I/O, optionally with tracker
         let mut reader = if let Some(tracker) = io_tracker {
-            AlignedReader::from_raw_fd_with_tracker(self.fd, Some(tracker)).unwrap()
+            AlignedReader::from_fd_with_tracer(self.fd.clone(), Some(tracker)).unwrap()
         } else {
-            AlignedReader::from_raw_fd(self.fd).unwrap()
+            AlignedReader::from_fd(self.fd.clone()).unwrap()
         };
 
         // Use sparse index to seek to a good starting position
@@ -296,8 +297,6 @@ impl Iterator for RunIterator {
 mod tests {
     use super::*;
     use crate::Run;
-    use crate::constants::open_file_with_direct_io;
-    use std::os::fd::IntoRawFd;
     use std::path::PathBuf;
 
     fn get_test_path(name: &str) -> PathBuf {
@@ -311,10 +310,11 @@ mod tests {
 
     fn get_test_writer(name: &str) -> AlignedWriter {
         let path = get_test_path(name);
-        let file = open_file_with_direct_io(&path).expect("Failed to open test file");
-        let fd = file.into_raw_fd();
+        let fd = Arc::new(
+            SharedFd::new_from_path(&path).expect("Failed to open test file with Direct I/O"),
+        );
 
-        AlignedWriter::from_raw_fd(fd).unwrap()
+        AlignedWriter::from_fd(fd).unwrap()
     }
 
     #[test]
