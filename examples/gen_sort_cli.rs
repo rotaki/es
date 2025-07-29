@@ -2,6 +2,8 @@ use clap::Parser;
 use es::sort_policy::{SortConfig, get_all_policies};
 use es::{ExternalSorter, GenSortInputDirect};
 use es::{RunsOutput, SortOutput, SortStats};
+use std::fs::File;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -168,6 +170,11 @@ fn sort_gensort(
 
                 // Remove temporary directory
                 std::fs::remove_dir_all(&temp_dir)?;
+                unsafe {
+                    let dir_fd = File::open(dir)
+                        .map_err(|e| format!("Failed to open directory {:?}: {}", dir, e))?;
+                    libc::syncfs(dir_fd.as_raw_fd());
+                }
             }
             println!("  Warmup complete.\n");
         }
@@ -265,11 +272,18 @@ fn sort_gensort(
                 }) as Box<dyn SortOutput>;
                 verify_sorted_output(true, &output)?;
                 println!("    Verification passed!");
+            } else {
+                drop(merged_runs); // Drop to release resources
             }
             println!();
 
             // Remove temporary directory
             std::fs::remove_dir_all(&temp_dir)?;
+            unsafe {
+                let dir_fd = File::open(dir)
+                    .map_err(|e| format!("Failed to open directory {:?}: {}", dir, e))?;
+                libc::syncfs(dir_fd.as_raw_fd());
+            }
         }
 
         // Calculate averages

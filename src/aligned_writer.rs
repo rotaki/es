@@ -144,10 +144,10 @@ impl Drop for AlignedWriter {
 mod tests {
     use super::*;
     use crate::aligned_reader::AlignedReader;
-    
+
     use std::fs;
     use std::io::Read;
-    
+
     use std::path::Path;
     use tempfile::tempdir;
 
