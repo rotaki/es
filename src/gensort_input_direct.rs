@@ -171,10 +171,3 @@ impl Iterator for GenSortScanner {
         self.read_record()
     }
 }
-
-// We need to explicitly forget the file to prevent it from being closed
-impl Drop for GenSortScanner {
-    fn drop(&mut self) {
-        // The AlignedReader will handle closing the file descriptor
-    }
-}
