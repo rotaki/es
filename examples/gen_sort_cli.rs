@@ -58,6 +58,7 @@ struct RunStats {
 
 #[derive(Clone)]
 struct BenchmarkResult {
+    policy_name: String,
     threads: usize,
     memory_mb: usize,
     memory_str: String,
@@ -153,7 +154,7 @@ fn sort_gensort(
 
                 let gensort_input = Box::new(GenSortInputDirect::new(input)?);
 
-                let (runs, run_gen_stats) = ExternalSorter::run_generation(
+                let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
                     gensort_input.clone(),
                     params.run_gen_threads as usize,
                     (params.run_size_mb * 1024.0 * 1024.0) as usize,
@@ -161,7 +162,7 @@ fn sort_gensort(
                 )?;
 
                 let (_merged_runs, merge_stats) =
-                    ExternalSorter::merge(runs, params.merge_threads as usize, &temp_dir)?;
+                    ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
 
                 println!(
                     "{:.2}s",
@@ -195,7 +196,7 @@ fn sort_gensort(
 
             let gensort_input = Box::new(GenSortInputDirect::new(input)?);
 
-            let (runs, run_gen_stats) = ExternalSorter::run_generation(
+            let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
                 gensort_input.clone(),
                 params.run_gen_threads as usize,
                 (params.run_size_mb * 1024.0 * 1024.0) as usize,
@@ -203,7 +204,7 @@ fn sort_gensort(
             )?;
 
             let (merged_runs, merge_stats) =
-                ExternalSorter::merge(runs, params.merge_threads as usize, &temp_dir)?;
+                ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
 
             let stats = SortStats {
                 num_runs: run_gen_stats.num_runs,
@@ -307,14 +308,11 @@ fn sort_gensort(
         let total_write_mb = rg_write_mb + m_write_mb;
 
         // Calculate average imbalance factor
-        println!("Imbalance sum: {}", accumulated_stats.imbalance_sum);
-        println!("Imbalance count: {}", accumulated_stats.imbalance_count);
         let avg_imbalance_factor = if accumulated_stats.imbalance_count > 0 {
             accumulated_stats.imbalance_sum / accumulated_stats.imbalance_count as f64
         } else {
             1.0 // Perfect balance or single partition
         };
-        println!("Average imbalance factor: {:.2}x", avg_imbalance_factor);
 
         // Calculate read amplification
         let read_amplification = if rg_write_mb > 0.0 {
@@ -324,6 +322,7 @@ fn sort_gensort(
         };
 
         all_results.push(BenchmarkResult {
+            policy_name: policy.name(),
             threads,
             memory_mb,
             memory_str: bytes_to_human_readable(memory_mb * 1024 * 1024),
@@ -374,11 +373,12 @@ fn bytes_to_human_readable(bytes: usize) -> String {
 }
 
 fn print_benchmark_summary(results: &[BenchmarkResult]) {
-    println!("\n{}", "=".repeat(160));
+    println!("\n{}", "=".repeat(200));
     println!("Benchmark Results Summary");
-    println!("{}", "=".repeat(160));
+    println!("{}", "=".repeat(200));
     println!(
-        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
+        "{:<50} {:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
+        "Policy",
         "Threads",
         "Memory",
         "Run Size",
@@ -395,14 +395,15 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
         "Imbalance"
     );
     println!(
-        "{:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
-        "", "", "(MB)", "", "", "", "", "", "", "", "(M entries/s)", "", "", "Factor"
+        "{:<50} {:<8} {:<12} {:<10} {:<10} {:<10} {:<6} {:<10} {:<12} {:<10} {:<12} {:<16} {:<10} {:<10} {:<12}",
+        "", "", "", "(MB)", "", "", "", "", "", "", "", "(M entries/s)", "", "", "Factor"
     );
-    println!("{}", "-".repeat(160));
+    println!("{}", "-".repeat(200));
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1} {:<12.5}",
+            "{:<50} {:<8} {:<12} {:<10.1} {:<10} {:<10} {:<6} {:<10.2} {:<12.2} {:<10.2} {:<12} {:<16.2} {:<10.1} {:<10.1} {:<12}",
+            result.policy_name,
             result.threads,
             result.memory_str,
             result.run_size_mb,
@@ -423,30 +424,32 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             },
         );
     }
-    println!("{}", "=".repeat(152));
+    println!("{}", "=".repeat(200));
 
     // Print detailed I/O statistics
     println!("\nDetailed I/O Statistics Summary:");
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(180));
     println!(
-        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+        "{:<50} {:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+        "Policy",
         "Threads",
         "Memory",
         "Run Gen Reads",
         "Run Gen Writes",
         "Merge Reads",
         "Merge Writes",
-        "Read Amplif."
+        "Read Amp."
     );
     println!(
-        "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
-        "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)", "Factor"
+        "{:<50} {:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+        "", "", "", "(ops / MB)", "(ops / MB)", "(ops / MB)", "(ops / MB)", "Factor"
     );
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(180));
 
     for result in results {
         println!(
-            "{:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+            "{:<50} {:<8} {:<12} {:<20} {:<20} {:<20} {:<20} {:<15}",
+            result.policy_name,
             result.threads,
             result.memory_str,
             format!(
@@ -462,7 +465,7 @@ fn print_benchmark_summary(results: &[BenchmarkResult]) {
             format!("{:.3}x", result.read_amplification),
         );
     }
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(180));
 }
 
 fn verify_sorted_output(

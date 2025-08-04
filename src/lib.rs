@@ -17,7 +17,6 @@ pub trait SortBuffer {
 }
 
 pub trait Run {
-    fn samples(&self) -> Vec<(Vec<u8>, usize, usize)>; // Key, file offset, entry number
     fn append(&mut self, key: Vec<u8>, value: Vec<u8>);
     fn scan_range(
         &self,
@@ -231,9 +230,11 @@ pub mod csv_input_direct;
 pub mod file;
 pub mod gensort_input_direct;
 pub mod io_stats;
+pub mod kll;
 pub mod merge;
 pub mod order_preserving_encoding;
 pub mod parquet_input_direct;
+pub mod rand;
 pub mod run;
 pub mod sort_buffer;
 pub mod sort_policy;

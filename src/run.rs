@@ -1,11 +1,10 @@
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
-
 use crate::aligned_reader::AlignedReader;
 use crate::aligned_writer::AlignedWriter;
 use crate::constants::{PAGE_SIZE, align_down};
 use crate::file::SharedFd;
 use crate::io_stats::IoStatsTracker;
+use crate::rand::small_thread_rng;
+use rand::Rng;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
@@ -91,13 +90,6 @@ impl RunImpl {
 }
 
 impl super::Run for RunImpl {
-    fn samples(&self) -> Vec<(Vec<u8>, usize, usize)> {
-        self.sparse_index
-            .iter()
-            .map(|entry| (entry.key.clone(), entry.file_offset, entry.entry_number))
-            .collect()
-    }
-
     fn append(&mut self, key: Vec<u8>, value: Vec<u8>) {
         let writer = self
             .writer
@@ -116,7 +108,7 @@ impl super::Run for RunImpl {
             self.sparse_index.push(index_entry);
         } else {
             // Reservoir is full, use random replacement
-            let mut rng = SmallRng::from_os_rng();
+            let mut rng = small_thread_rng();
             let j = rng.random_range(0..=self.entries_seen);
             if j < self.reservoir_size {
                 self.sparse_index[j] = index_entry;
@@ -555,32 +547,6 @@ mod tests {
             assert_eq!(&value, expected_value);
         }
         assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn test_sample_method() {
-        let writer = get_test_writer("sample");
-        let mut run = RunImpl::from_writer(writer).unwrap();
-
-        // Add many entries
-        for i in 0..100 {
-            let key = format!("{:03}", i).into_bytes();
-            let value = format!("val_{}", i).into_bytes();
-            run.append(key, value);
-        }
-        run.finalize_write();
-
-        // Test sampling - should return samples from sparse index
-        let samples = run.samples();
-        assert!(!samples.is_empty());
-
-        // Verify samples are ordered
-        for i in 1..samples.len() {
-            assert!(samples[i - 1].0 < samples[i].0);
-        }
-
-        // Verify first sample is the first key (we always index first entry)
-        assert_eq!(samples[0].0, b"000");
     }
 
     #[test]

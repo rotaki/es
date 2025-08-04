@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::aligned_writer::AlignedWriter;
 use crate::file::SharedFd;
+use crate::kll::Sketch;
 use crate::merge::MergeIterator;
 use crate::run::RunImpl;
 use crate::sort_buffer::SortBufferImpl;
@@ -30,44 +31,44 @@ pub struct MergeStats {
     pub io_stats: Option<IoStats>,
 }
 
-/// Compute partition points for parallel merging
-fn compute_partition_points(runs: &[RunImpl], num_partitions: usize) -> Vec<Vec<u8>> {
-    if num_partitions <= 1 || runs.is_empty() {
-        return vec![];
-    }
-
-    // Sample from all runs
-    let mut all_samples = Vec::new();
-
-    for run in runs {
-        all_samples.extend(
-            run.samples()
-                .into_iter()
-                .map(|(key, _file_offset, _entry_number)| key),
-        );
-    }
-
-    // Remove empty keys from samples as they don't make good partition points
-    all_samples.retain(|k| !k.is_empty());
-
-    // Sort all samples
-    all_samples.sort_unstable();
-
-    // Pick partition points
-    let mut partition_points = Vec::with_capacity(num_partitions - 1);
-
-    if !all_samples.is_empty() {
-        let step = all_samples.len() as f64 / num_partitions as f64;
-        for i in 1..num_partitions {
-            let idx = (i as f64 * step).round() as usize;
-            if idx < all_samples.len() {
-                partition_points.push(all_samples[idx].clone());
-            }
-        }
-    }
-
-    partition_points
-}
+// Compute partition points for parallel merging
+// fn compute_partition_points(runs: &[RunImpl], num_partitions: usize) -> Vec<Vec<u8>> {
+//     if num_partitions <= 1 || runs.is_empty() {
+//         return vec![];
+//     }
+//
+//     // Sample from all runs
+//     let mut all_samples = Vec::new();
+//
+//     for run in runs {
+//         all_samples.extend(
+//             run.samples()
+//                 .into_iter()
+//                 .map(|(key, _file_offset, _entry_number)| key),
+//         );
+//     }
+//
+//     // Remove empty keys from samples as they don't make good partition points
+//     all_samples.retain(|k| !k.is_empty());
+//
+//     // Sort all samples
+//     all_samples.sort_unstable();
+//
+//     // Pick partition points
+//     let mut partition_points = Vec::with_capacity(num_partitions - 1);
+//
+//     if !all_samples.is_empty() {
+//         let step = all_samples.len() as f64 / num_partitions as f64;
+//         for i in 1..num_partitions {
+//             let idx = (i as f64 * step).round() as usize;
+//             if idx < all_samples.len() {
+//                 partition_points.push(all_samples[idx].clone());
+//             }
+//         }
+//     }
+//
+//     partition_points
+// }
 
 // Input implementation
 pub struct Input {
@@ -272,7 +273,7 @@ impl ExternalSorter {
         num_threads: usize,
         per_thread_mem: usize,
         dir: impl AsRef<Path>,
-    ) -> Result<(Vec<RunImpl>, RunGenerationStats), String> {
+    ) -> Result<(Vec<RunImpl>, Sketch<Vec<u8>>, RunGenerationStats), String> {
         // Start timing for run generation
         let run_generation_start = Instant::now();
 
@@ -288,9 +289,13 @@ impl ExternalSorter {
             scanners.len()
         );
 
+        let sketch_size = 200;
+        let sample_step_size = 1000;
+
         if scanners.is_empty() {
             return Ok((
                 vec![],
+                Sketch::new(sketch_size),
                 RunGenerationStats {
                     num_runs: 0,
                     runs_info: vec![],
@@ -310,6 +315,7 @@ impl ExternalSorter {
             let handle = thread::spawn(move || {
                 let mut local_runs = Vec::new();
                 let mut sort_buffer = SortBufferImpl::new(per_thread_mem);
+                let mut sketch = Sketch::new(sketch_size);
 
                 let run_path = dir.join(format!("intermediate_{}.dat", thread_id));
                 let fd = Arc::new(
@@ -320,6 +326,7 @@ impl ExternalSorter {
                     AlignedWriter::from_fd_with_tracker(fd, Some((*io_tracker).clone()))
                         .expect("Failed to create run writer"),
                 );
+                let mut cnt = 0;
 
                 for (key, value) in scanner {
                     if !sort_buffer.has_space(&key, &value) {
@@ -330,6 +337,11 @@ impl ExternalSorter {
                             .expect("Failed to create run");
 
                         for (k, v) in sort_buffer.drain() {
+                            cnt += 1;
+                            if cnt >= sample_step_size {
+                                sketch.update(k.clone());
+                                cnt = 0;
+                            }
                             output_run.append(k, v);
                         }
 
@@ -356,6 +368,11 @@ impl ExternalSorter {
                         .expect("Failed to create run");
 
                     for (k, v) in sort_buffer.drain() {
+                        cnt += 1;
+                        if cnt >= sample_step_size {
+                            sketch.update(k.clone());
+                            cnt = 0;
+                        }
                         output_run.append(k, v);
                     }
 
@@ -368,7 +385,7 @@ impl ExternalSorter {
 
                 drop(run_writer); // Ensure the writer is closed
 
-                local_runs
+                (local_runs, sketch)
             });
 
             handles.push(handle);
@@ -376,9 +393,11 @@ impl ExternalSorter {
 
         // Collect runs from all threads
         let mut output_runs = Vec::new();
+        let mut sketch = Sketch::new(sketch_size); // Combine sketches from all threads
         for handle in handles {
-            let runs = handle.join().unwrap();
+            let (runs, thread_sketch) = handle.join().unwrap();
             output_runs.extend(runs);
+            sketch.merge(&thread_sketch);
         }
 
         let initial_runs_count = output_runs.len();
@@ -405,6 +424,7 @@ impl ExternalSorter {
 
         Ok((
             output_runs,
+            sketch,
             RunGenerationStats {
                 num_runs: initial_runs_count,
                 runs_info: initial_runs_info,
@@ -417,6 +437,7 @@ impl ExternalSorter {
     pub fn merge(
         output_runs: Vec<RunImpl>,
         num_threads: usize,
+        sketch: Sketch<Vec<u8>>,
         dir: impl AsRef<Path>,
     ) -> Result<(Vec<RunImpl>, MergeStats), String> {
         // If no runs or single run, return early
@@ -447,17 +468,11 @@ impl ExternalSorter {
         let merge_io_tracker = Arc::new(IoStatsTracker::new());
 
         // Parallel Merge Phase for many runs
-        let desired_threads = num_threads;
+        // let desired_threads = num_threads;
+        let merge_threads = num_threads;
 
         // Compute partition points
-        let partition_points = compute_partition_points(&output_runs, desired_threads);
-
-        // Actual number of threads is based on partition points
-        let merge_threads = if partition_points.is_empty() {
-            1 // Fall back to single thread if no partition points
-        } else {
-            partition_points.len() + 1
-        };
+        let cdf = Arc::new(sketch.cdf());
 
         println!(
             "Merging {} runs using {} threads",
@@ -475,20 +490,22 @@ impl ExternalSorter {
             let runs = Arc::clone(&runs_arc);
             let dir = dir.as_ref().to_path_buf();
             let io_tracker = Arc::clone(&merge_io_tracker);
-            // Determine the key range for this thread
-            let lower_bound = if thread_id == 0 {
-                vec![]
-            } else {
-                partition_points[thread_id - 1].clone()
-            };
-
-            let upper_bound = if thread_id < partition_points.len() {
-                partition_points[thread_id].clone()
-            } else {
-                vec![]
-            };
+            let cdf = Arc::clone(&cdf);
 
             let handle = thread::spawn(move || {
+                // Determine the key range for this thread
+                let lower_bound = if thread_id == 0 {
+                    vec![]
+                } else {
+                    cdf.query(thread_id as f64 / merge_threads as f64)
+                };
+
+                let upper_bound = if thread_id < merge_threads - 1 {
+                    cdf.query((thread_id + 1) as f64 / merge_threads as f64)
+                } else {
+                    vec![]
+                };
+
                 // Create iterators for this key range from all runs
                 let iterators: Vec<_> = runs
                     .iter()
@@ -566,19 +583,25 @@ impl Sorter for ExternalSorter {
     /// Sort method that runs generation and merging phases
     fn sort(&mut self, sort_input: Box<dyn SortInput>) -> Result<Box<dyn SortOutput>, String> {
         // Run generation phase
-        let (runs, run_gen_stats) = ExternalSorter::run_generation(
+        let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
             sort_input,
             self.run_gen_threads,
             self.max_memory / self.run_gen_threads,
             self.temp_dir_info.as_ref(),
         )?;
 
+        println!("{}", sketch);
+
         // Merge phase
-        let (merged_runs, merge_stats) =
-            ExternalSorter::merge(runs, self.merge_threads, self.temp_dir_info.as_ref())?;
+        let (merged_runs, merge_stats) = ExternalSorter::merge(
+            runs,
+            self.merge_threads,
+            sketch,
+            self.temp_dir_info.as_ref(),
+        )?;
 
         // Combine stats
-        let sort_stats = SortStats {
+        let sort_stats: SortStats = SortStats {
             num_runs: run_gen_stats.num_runs,
             runs_info: run_gen_stats.runs_info,
             run_generation_time_ms: Some(run_gen_stats.time_ms),
