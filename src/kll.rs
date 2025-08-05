@@ -620,6 +620,11 @@ impl<T> CDF<T>
 where
     T: PartialOrd + Clone,
 {
+    /// Find the size of the CDF.
+    pub fn size(&self) -> usize {
+        self.0.len()
+    }
+
     /// Find the quantile for a given value x.
     /// Returns the fraction of values less than or equal to x.
     pub fn quantile(&self, x: T) -> f64 {

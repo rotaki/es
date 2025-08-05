@@ -233,6 +233,7 @@ pub mod io_stats;
 pub mod kll;
 pub mod merge;
 pub mod order_preserving_encoding;
+pub mod ovc;
 pub mod parquet_input_direct;
 pub mod rand;
 pub mod run;

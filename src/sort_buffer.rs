@@ -39,7 +39,7 @@ impl super::SortBuffer for SortBufferImpl {
     }
 
     fn sort(&mut self) {
-        self.data.sort_by(|a, b| a.0.cmp(&b.0));
+        self.data.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     }
 
     fn drain(&mut self) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {

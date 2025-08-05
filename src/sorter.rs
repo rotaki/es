@@ -469,10 +469,12 @@ impl ExternalSorter {
 
         // Parallel Merge Phase for many runs
         // let desired_threads = num_threads;
-        let merge_threads = num_threads;
-
-        // Compute partition points
         let cdf = Arc::new(sketch.cdf());
+        let merge_threads = if cdf.size() < num_threads {
+            1
+        } else {
+            num_threads
+        };
 
         println!(
             "Merging {} runs using {} threads",
@@ -589,8 +591,6 @@ impl Sorter for ExternalSorter {
             self.max_memory / self.run_gen_threads,
             self.temp_dir_info.as_ref(),
         )?;
-
-        println!("{}", sketch);
 
         // Merge phase
         let (merged_runs, merge_stats) = ExternalSorter::merge(
