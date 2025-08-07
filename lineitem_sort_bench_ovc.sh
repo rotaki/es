@@ -33,6 +33,7 @@ if [ ! -f "$INPUT_FILE" ]; then
 fi
 
 # Check if binary exists
+cargo build --release --example lineitem_benchmark_cli
 BINARY="./target/release/examples/lineitem_benchmark_cli"
 if [ ! -f "$BINARY" ]; then
     echo -e "${YELLOW}Binary not found, building in release mode...${NC}"
