@@ -26,7 +26,10 @@ impl<I: Iterator<Item = (OVCU64, Vec<u8>, Vec<u8>)>> MergeWithOVC<I> {
         for i in 0..iterators.len() {
             let e = iterators[i]
                 .next()
-                .map_or(OVCKeyValuePair::late_fence(), |e| e.into());
+                .map_or(OVCKeyValuePair::late_fence(), |(_ovc, k, v)| {
+                    // The OVC of the first element in each iterator is ignored and set to initial value
+                    OVCKeyValuePair::new(k, v)
+                });
             tree.pop_and_insert(i, Some(e.into()));
         }
 
@@ -51,10 +54,7 @@ impl<I: Iterator<Item = (OVCU64, Vec<u8>, Vec<u8>)>> Iterator for MergeWithOVC<I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ovc::{
-        offset_value_coding::OVCTrait,
-        offset_value_coding_u64::{encode_run_with_ovc64, encode_runs_with_ovc64},
-    };
+    use crate::ovc::offset_value_coding::OVCTrait;
 
     // Helper function to encode a sorted run with proper OVC values
     fn encode_run_with_ovc(data: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(OVCU64, Vec<u8>, Vec<u8>)> {

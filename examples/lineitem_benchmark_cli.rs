@@ -8,11 +8,50 @@ use es::{
     CsvDirectConfig, CsvInputDirect, ExternalSorter, RunsOutput, SortInput, SortOutput, SortStats,
     order_preserving_encoding::decode_bytes,
 };
+use es::{ExternalSorterWithOVC, RunsOutputWithOVC};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+// TPC-H lineitem column cardinality reference table
+// Column Index | Column Name         | DataType      | Cardinality | Distinct Values    | Category
+// -------------|-------------------- |---------------|-------------|--------------------|-----------
+// 0            | l_orderkey          | Int64         | High        | ~1.5M * SF         | High (foreign key to Orders)
+// 1            | l_partkey           | Int64         | High        | 200,000 * SF       | High (foreign key to Part)
+// 2            | l_suppkey           | Int64         | Medium      | 10,000 * SF        | Medium (foreign key to Supplier)
+// 3            | l_linenumber        | Int32         | Ultra-Low   | 7                  | Ultra-Low (values: 1-7)
+// 4            | l_quantity          | Float64       | Low         | 50                 | Low (integer values: 1-50)
+// 5            | l_extendedprice     | Float64       | High        | Continuous         | High (calculated: quantity * price)
+// 6            | l_discount          | Float64       | Ultra-Low   | 11                 | Ultra-Low (values: 0.00-0.10, step 0.01)
+// 7            | l_tax               | Float64       | Ultra-Low   | 9                  | Ultra-Low (values: 0.00-0.08, step 0.01)
+// 8            | l_returnflag        | Utf8          | Ultra-Low   | 3                  | Ultra-Low (values: 'R', 'A', 'N')
+// 9            | l_linestatus        | Utf8          | Binary      | 2                  | Binary (values: 'O', 'F')
+// 10           | l_shipdate          | Date32        | Medium      | ~2,526             | Medium (range: 1992-01-02 to 1998-12-01)
+// 11           | l_commitdate        | Date32        | Medium      | ~2,466             | Medium (similar range to shipdate)
+// 12           | l_receiptdate       | Date32        | Medium      | ~2,554             | Medium (typically after shipdate)
+// 13           | l_shipinstruct      | Utf8          | Ultra-Low   | 4                  | Ultra-Low (values: 'DELIVER IN PERSON', 'COLLECT COD', 'NONE', 'TAKE BACK RETURN')
+// 14           | l_shipmode          | Utf8          | Ultra-Low   | 7                  | Ultra-Low (values: 'REG AIR', 'AIR', 'RAIL', 'SHIP', 'TRUCK', 'MAIL', 'FOB')
+// 15           | l_comment           | Utf8          | High        | Nearly unique      | High (random text comments)
+
+// Cardinality categories for sorting algorithm selection:
+// - Binary (2 values):      Use simple partition - Column 9
+// - Ultra-Low (≤11 values): Use counting sort - Columns 3, 6, 7, 8, 9, 13, 14
+// - Low (12-100 values):    Use counting sort - Column 4
+// - Medium (100-10K):       Use radix or quicksort - Columns 2, 10, 11, 12
+// - High (>10K):           Use quicksort or parallel sort - Columns 0, 1, 5, 15
+
+// Sorting-friendly columns (counting sort applicable): 3, 4, 6, 7, 8, 9, 13, 14
+// String columns requiring expensive comparisons: 8, 9, 13, 14, 15
+// Continuous numeric requiring comparison-based sort: 0, 1, 2, 5
+// Date columns with temporal clustering: 10, 11, 12
+
+// Scale Factor (SF) impact on row counts:
+// SF=1:    ~6 million rows
+// SF=10:   ~60 million rows
+// SF=100:  ~600 million rows
+// SF=1000: ~6 billion rows
 
 // TPC-H lineitem schema definition - made global for access by estimation functions
 fn get_lineitem_schema() -> Arc<Schema> {
@@ -45,7 +84,7 @@ struct Args {
     input: PathBuf,
 
     /// Key column indices (comma-separated)
-    #[arg(short = 'k', long, default_value = "10,5,1")]
+    #[arg(short = 'k', long, default_value = "8,9,13,14,15")]
     key_columns: String,
 
     /// Value column indices (comma-separated)  
@@ -59,6 +98,10 @@ struct Args {
     /// Maximum total memory in MB
     #[arg(short, long, default_value = "1024")]
     memory_mb: usize,
+
+    /// Use OVC encoding for keys
+    #[arg(long, default_value = "false")]
+    ovc: bool,
 
     /// Directory for temporary files
     #[arg(short, long, default_value = ".")]
@@ -172,6 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.input,
         args.threads,
         args.memory_mb,
+        args.ovc,
         &args.dir,
         key_columns,
         value_columns,
@@ -189,6 +233,7 @@ fn sort_lineitem(
     input_path: &Path,
     threads: usize,
     memory_mb: usize,
+    ovc: bool,
     dir: &Path,
     key_columns: Vec<usize>,
     value_columns: Vec<usize>,
@@ -261,6 +306,10 @@ fn sort_lineitem(
     );
     println!("CSV delimiter: '{}'", delimiter);
     println!("CSV has headers: {}", has_headers);
+    println!("Threads: {}", threads);
+    println!("Memory limit: {} MB", memory_mb);
+    println!("OVC enabled: {}", ovc);
+    println!("Temporary directory: {:?}", dir);
     println!("Warmup runs: {}", warmup_runs);
     println!("Runs per configuration: {}", benchmark_runs);
     println!("Verify output: {}", verify);
@@ -298,15 +347,41 @@ fn sort_lineitem(
                 let run_size_bytes =
                     ((params.run_size_mb * 1024.0 * 1024.0).max(1024.0 * 1024.0)) as usize;
 
-                let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
-                    input,
-                    params.run_gen_threads as usize,
-                    run_size_bytes,
-                    &temp_dir,
-                )?;
+                let (run_gen_stats, merge_stats) = if ovc {
+                    let (runs, sketch, run_gen_stats) = ExternalSorterWithOVC::run_generation(
+                        input,
+                        params.run_gen_threads as usize,
+                        run_size_bytes,
+                        &temp_dir,
+                    )?;
 
-                let (_merged_runs, merge_stats) =
-                    ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
+                    let (_merged_runs, merge_stats) = ExternalSorterWithOVC::merge(
+                        runs,
+                        params.merge_threads as usize,
+                        sketch,
+                        &temp_dir,
+                    )?;
+                    drop(_merged_runs); // Drop to avoid unused variable warning
+
+                    (run_gen_stats, merge_stats)
+                } else {
+                    let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
+                        input,
+                        params.run_gen_threads as usize,
+                        run_size_bytes,
+                        &temp_dir,
+                    )?;
+
+                    let (_merged_runs, merge_stats) = ExternalSorter::merge(
+                        runs,
+                        params.merge_threads as usize,
+                        sketch,
+                        &temp_dir,
+                    )?;
+                    drop(_merged_runs); // Drop to avoid unused variable warning
+
+                    (run_gen_stats, merge_stats)
+                };
 
                 println!(
                     "{:.2}s",
@@ -353,52 +428,93 @@ fn sort_lineitem(
             let run_size_bytes =
                 ((params.run_size_mb * 1024.0 * 1024.0).max(1024.0 * 1024.0)) as usize;
 
-            let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
-                input,
-                params.run_gen_threads as usize,
-                run_size_bytes,
-                &temp_dir,
-            )?;
+            let output = if ovc {
+                let (runs, sketch, run_gen_stats) = ExternalSorterWithOVC::run_generation(
+                    input,
+                    params.run_gen_threads as usize,
+                    run_size_bytes,
+                    &temp_dir,
+                )?;
 
-            let (merged_runs, merge_stats) =
-                ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
+                let (merged_runs, merge_stats) = ExternalSorterWithOVC::merge(
+                    runs,
+                    params.merge_threads as usize,
+                    sketch,
+                    &temp_dir,
+                )?;
 
-            // Capture values before moving into SortStats
-            let merge_entry_sum = merge_stats.merge_entry_num.iter().sum::<u64>() as usize;
-            let merge_time_ms = merge_stats.time_ms;
+                let stats = SortStats {
+                    num_runs: run_gen_stats.num_runs,
+                    runs_info: run_gen_stats.runs_info,
+                    run_generation_time_ms: Some(run_gen_stats.time_ms),
+                    merge_entry_num: merge_stats.merge_entry_num,
+                    merge_time_ms: Some(merge_stats.time_ms),
+                    run_generation_io_stats: run_gen_stats.io_stats,
+                    merge_io_stats: merge_stats.io_stats,
+                };
 
-            let stats = SortStats {
-                num_runs: run_gen_stats.num_runs,
-                runs_info: run_gen_stats.runs_info,
-                run_generation_time_ms: Some(run_gen_stats.time_ms),
-                merge_entry_num: merge_stats.merge_entry_num,
-                merge_time_ms: Some(merge_stats.time_ms),
-                run_generation_io_stats: run_gen_stats.io_stats,
-                merge_io_stats: merge_stats.io_stats,
+                let output = Box::new(RunsOutputWithOVC {
+                    runs: merged_runs,
+                    stats: stats.clone(),
+                }) as Box<dyn SortOutput>;
+
+                output
+            } else {
+                let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
+                    input,
+                    params.run_gen_threads as usize,
+                    run_size_bytes,
+                    &temp_dir,
+                )?;
+
+                let (merged_runs, merge_stats) =
+                    ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
+
+                let stats = SortStats {
+                    num_runs: run_gen_stats.num_runs,
+                    runs_info: run_gen_stats.runs_info,
+                    run_generation_time_ms: Some(run_gen_stats.time_ms),
+                    merge_entry_num: merge_stats.merge_entry_num,
+                    merge_time_ms: Some(merge_stats.time_ms),
+                    run_generation_io_stats: run_gen_stats.io_stats,
+                    merge_io_stats: merge_stats.io_stats,
+                };
+
+                let output = Box::new(RunsOutput {
+                    runs: merged_runs,
+                    stats: stats.clone(),
+                }) as Box<dyn SortOutput>;
+
+                output
             };
 
-            println!("{}", stats);
+            // Capture values before moving into SortStats
+            let run_gen_time_ms = output.stats().run_generation_time_ms.unwrap();
+            let merge_time_ms = output.stats().merge_time_ms.unwrap();
+            let merge_entry_sum = output.stats().merge_entry_num.iter().sum::<u64>() as usize;
+
+            println!("{}", output.stats());
 
             // Accumulate statistics
             accumulated_stats.total_time +=
-                run_gen_stats.time_ms as f64 / 1000.0 + merge_time_ms as f64 / 1000.0;
-            accumulated_stats.runs_count += stats.num_runs;
+                run_gen_time_ms as f64 / 1000.0 + merge_time_ms as f64 / 1000.0;
+            accumulated_stats.runs_count += output.stats().num_runs;
 
-            if let Some(rg_time) = stats.run_generation_time_ms {
+            if let Some(rg_time) = output.stats().run_generation_time_ms {
                 accumulated_stats.run_gen_time += rg_time as f64 / 1000.0;
             }
-            if let Some(m_time) = stats.merge_time_ms {
+            if let Some(m_time) = output.stats().merge_time_ms {
                 accumulated_stats.merge_time += m_time as f64 / 1000.0;
             }
 
             // Accumulate I/O stats
-            if let Some(ref io) = stats.run_generation_io_stats {
+            if let Some(ref io) = output.stats().run_generation_io_stats {
                 accumulated_stats.run_gen_read_ops += io.read_ops;
                 accumulated_stats.run_gen_read_mb += io.read_bytes as f64 / 1_000_000.0;
                 accumulated_stats.run_gen_write_ops += io.write_ops;
                 accumulated_stats.run_gen_write_mb += io.write_bytes as f64 / 1_000_000.0;
             }
-            if let Some(ref io) = stats.merge_io_stats {
+            if let Some(ref io) = output.stats().merge_io_stats {
                 accumulated_stats.merge_read_ops += io.read_ops;
                 accumulated_stats.merge_read_mb += io.read_bytes as f64 / 1_000_000.0;
                 accumulated_stats.merge_write_ops += io.write_ops;
@@ -406,15 +522,15 @@ fn sort_lineitem(
             }
 
             // Calculate imbalance factor
-            if stats.merge_entry_num.len() > 1 {
-                let min_entries = *stats.merge_entry_num.iter().min().unwrap_or(&0);
-                let max_entries = *stats.merge_entry_num.iter().max().unwrap_or(&0);
+            if output.stats().merge_entry_num.len() > 1 {
+                let min_entries = *output.stats().merge_entry_num.iter().min().unwrap_or(&0);
+                let max_entries = *output.stats().merge_entry_num.iter().max().unwrap_or(&0);
                 if min_entries > 0 {
                     let imbalance = max_entries as f64 / min_entries as f64;
                     accumulated_stats.imbalance_sum += imbalance;
                     accumulated_stats.imbalance_count += 1;
                 }
-            } else if stats.merge_entry_num.len() == 1 {
+            } else if output.stats().merge_entry_num.len() == 1 {
                 accumulated_stats.imbalance_sum += 1.0;
                 accumulated_stats.imbalance_count += 1;
             }
@@ -422,7 +538,7 @@ fn sort_lineitem(
             valid_runs += 1;
             println!(
                 "{:.2}s",
-                run_gen_stats.time_ms as f64 / 1000.0 + merge_time_ms as f64 / 1000.0
+                run_gen_time_ms as f64 / 1000.0 + merge_time_ms as f64 / 1000.0
             );
 
             // Update actual entries from merge stats if not known
@@ -432,15 +548,10 @@ fn sort_lineitem(
 
             // Verify if requested (only on first run)
             if verify && run == 1 {
-                println!("    Verifying sorted output...");
-                let output = Box::new(RunsOutput {
-                    runs: merged_runs,
-                    stats: stats.clone(),
-                }) as Box<dyn SortOutput>;
                 verify_sorted_output(&output, &key_columns)?;
                 println!("    Verification passed!");
             } else {
-                drop(merged_runs);
+                drop(output); // Drop to avoid unused variable warning
             }
             println!();
 
@@ -795,20 +906,50 @@ fn verify_sorted_output(
     key_columns: &[usize],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut prev_key: Option<Vec<u8>> = None;
-    let mut count = 0;
+    let mut count: usize = 0;
+
+    // Store first and last 10 records with their sizes
+    struct RecordInfo {
+        decoded: String,
+        key_size: usize,
+        value_size: usize,
+    }
 
     let mut first_records = Vec::new();
     let mut last_records = Vec::new();
 
-    for (key, _value) in output.iter() {
-        if first_records.len() < 5 {
-            first_records.push(decode_key(&key, key_columns));
+    // Track total sizes for statistics
+    let mut total_key_size = 0usize;
+    let mut total_value_size = 0usize;
+
+    for (key, value) in output.iter() {
+        let key_size = key.len();
+        let value_size = value.len();
+
+        // Accumulate sizes
+        total_key_size += key_size;
+        total_value_size += value_size;
+
+        // Store first 10 records
+        if first_records.len() < 10 {
+            first_records.push(RecordInfo {
+                decoded: decode_key(&key, key_columns),
+                key_size,
+                value_size,
+            });
         }
-        last_records.push(decode_key(&key, key_columns));
-        if last_records.len() > 5 {
+
+        // Keep last 10 records in a sliding window
+        last_records.push(RecordInfo {
+            decoded: decode_key(&key, key_columns),
+            key_size,
+            value_size,
+        });
+        if last_records.len() > 10 {
             last_records.remove(0);
         }
 
+        // Check sort order
         if let Some(ref prev) = prev_key {
             if key < *prev {
                 eprintln!("ERROR: Sort order violation at record {}", count);
@@ -822,14 +963,70 @@ fn verify_sorted_output(
     }
 
     println!("    Verified {} records - all correctly sorted!", count);
-    println!("\n    First 5 records:");
-    for (i, key_str) in first_records.iter().enumerate() {
-        println!("      Record {}: {}", i, key_str);
+
+    // Print size statistics
+    println!("\n    === SIZE STATISTICS ===");
+    println!("    Total records: {}", count);
+    println!(
+        "    Average key size: {:.1} bytes",
+        total_key_size as f64 / count as f64
+    );
+    println!(
+        "    Average value size: {:.1} bytes",
+        total_value_size as f64 / count as f64
+    );
+    println!(
+        "    Total key bytes: {} ({:.2} MB)",
+        total_key_size,
+        total_key_size as f64 / (1024.0 * 1024.0)
+    );
+    println!(
+        "    Total value bytes: {} ({:.2} MB)",
+        total_value_size,
+        total_value_size as f64 / (1024.0 * 1024.0)
+    );
+    println!(
+        "    Total sort output: {} bytes ({:.2} MB)",
+        total_key_size + total_value_size,
+        (total_key_size + total_value_size) as f64 / (1024.0 * 1024.0)
+    );
+
+    // Print first 10 records with sizes
+    println!(
+        "\n    First {} records (with sizes):",
+        first_records.len().min(10)
+    );
+    println!(
+        "    {:>5} {:>10} {:>10}  {}",
+        "#", "Key Size", "Val Size", "Key Values"
+    );
+    println!("    {}", "-".repeat(80));
+    for (i, record) in first_records.iter().enumerate() {
+        println!(
+            "    {:>5} {:>10} {:>10}  {}",
+            i, record.key_size, record.value_size, record.decoded
+        );
     }
 
-    println!("\n    Last 5 records:");
-    for (i, key_str) in last_records.iter().enumerate() {
-        println!("      Record {}: {}", count - 5 + i, key_str);
+    // Print last 10 records with sizes
+    println!(
+        "\n    Last {} records (with sizes):",
+        last_records.len().min(10)
+    );
+    println!(
+        "    {:>5} {:>10} {:>10}  {}",
+        "#", "Key Size", "Val Size", "Key Values"
+    );
+    println!("    {}", "-".repeat(80));
+    let start_idx = count.saturating_sub(10);
+    for (i, record) in last_records.iter().enumerate() {
+        println!(
+            "    {:>5} {:>10} {:>10}  {}",
+            start_idx + i,
+            record.key_size,
+            record.value_size,
+            record.decoded
+        );
     }
 
     Ok(())
