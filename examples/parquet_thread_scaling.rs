@@ -11,7 +11,7 @@
 //!   -h, --help                   Show this help message
 
 use crossbeam::channel;
-use es::constants::DEFAULT_BUFFER_SIZE;
+use es::diskio::constants::DEFAULT_BUFFER_SIZE;
 use es::{IoStatsTracker, ParquetDirectConfig, ParquetInputDirect, SortInput};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::env;

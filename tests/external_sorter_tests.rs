@@ -1,4 +1,4 @@
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -17,7 +17,7 @@ fn test_basic_functionality() {
         (b"m".to_vec(), b"13".to_vec()),
     ];
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -40,7 +40,7 @@ fn test_large_dataset_single_thread() {
         data.insert(0, (key, value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -65,7 +65,7 @@ fn test_small_buffer_forces_external_sort() {
         data.push((key.into_bytes(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -92,7 +92,7 @@ fn test_multi_threaded_sorting() {
             data.push((key.into_bytes(), value.into_bytes()));
         }
 
-        let input = Input { data };
+        let input = InMemInput { data };
         let output = sorter.sort(Box::new(input)).unwrap();
 
         let results: Vec<_> = output.iter().collect();
@@ -128,7 +128,7 @@ fn test_duplicate_keys() {
     let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -176,7 +176,7 @@ fn test_variable_sized_entries() {
     let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -200,7 +200,7 @@ fn test_binary_data() {
         data.push((key, value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -238,7 +238,7 @@ fn test_unicode_strings() {
         data.push((s.as_bytes().to_vec(), i.to_string().into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -264,7 +264,7 @@ fn test_exact_buffer_boundary() {
         data.push((key, value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -287,7 +287,7 @@ fn test_single_entry_larger_than_buffer() {
     let value = vec![b'v'; 10];
 
     let data = vec![(key.clone(), value.clone())];
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -307,7 +307,7 @@ fn test_entry_too_large_panics() {
     let value = vec![b'v'; 100];
 
     let data = vec![(key, value)];
-    let input = Input { data };
+    let input = InMemInput { data };
 
     // This will panic when thread join fails
     let _ = sorter.sort(Box::new(input));
@@ -356,7 +356,7 @@ fn test_concurrent_sorters() {
                     data.push((key.into_bytes(), value.into_bytes()));
                 }
 
-                let input = Input { data };
+                let input = InMemInput { data };
                 let output = sorter.sort(Box::new(input)).unwrap();
                 let results: Vec<_> = output.iter().collect();
 
@@ -388,7 +388,7 @@ fn test_stability_of_sort() {
         data.push((b"key_b".to_vec(), format!("order_{:03}", i).into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -430,7 +430,7 @@ fn test_performance_scaling() {
             data.push((key.into_bytes(), value.into_bytes()));
         }
 
-        let input = Input { data };
+        let input = InMemInput { data };
         let start = Instant::now();
         let output = sorter.sort(Box::new(input)).unwrap();
         let elapsed = start.elapsed();
@@ -462,7 +462,7 @@ fn test_partition_distribution() {
 
     // We can't directly test partition sizes, but we can verify
     // that all data is processed correctly
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -498,7 +498,7 @@ fn test_thread_safety() {
                     data.push((key.into_bytes(), value));
                 }
 
-                let input = Input { data };
+                let input = InMemInput { data };
                 let output = sorter.sort(Box::new(input)).unwrap();
                 let results: Vec<_> = output.iter().collect();
 
@@ -524,7 +524,7 @@ fn test_merge_many_runs() {
         data.push((key.into_bytes(), value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();

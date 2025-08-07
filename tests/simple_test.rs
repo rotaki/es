@@ -11,7 +11,7 @@ fn test_dir() -> PathBuf {
     PathBuf::from("./test_runs")
 }
 
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 
 #[test]
 fn test_basic_sort() {
@@ -23,7 +23,7 @@ fn test_basic_sort() {
         (b"b".to_vec(), b"2".to_vec()),
     ];
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -45,7 +45,7 @@ fn test_external_sort() {
         data.push((key.into_bytes(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     // Verify sorted
@@ -61,7 +61,7 @@ fn test_external_sort() {
 fn test_empty_input() {
     let mut sorter = ExternalSorter::new_with_dir(2, 1024, test_dir());
 
-    let input = Input { data: vec![] };
+    let input = InMemInput { data: vec![] };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();

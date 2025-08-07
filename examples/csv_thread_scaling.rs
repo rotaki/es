@@ -12,7 +12,7 @@
 //!   --help                       Show this help message
 
 use arrow::datatypes::{DataType, Field, Schema};
-use es::constants::DEFAULT_BUFFER_SIZE;
+use es::diskio::constants::DEFAULT_BUFFER_SIZE;
 use es::{CsvDirectConfig, CsvInputDirect, IoStatsTracker, SortInput};
 use std::env;
 use std::fs::File;

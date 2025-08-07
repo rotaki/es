@@ -1,10 +1,10 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
-use crate::aligned_buffer::AlignedBuffer;
-use crate::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
-use crate::file::{SharedFd, pwrite_fd};
-use crate::io_stats::IoStatsTracker;
+use crate::diskio::aligned_buffer::AlignedBuffer;
+use crate::diskio::constants::{DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_up};
+use crate::diskio::file::{SharedFd, pwrite_fd};
+use crate::diskio::io_stats::IoStatsTracker;
 
 /// AlignedWriter that uses GlobalFileManager for file operations
 pub struct AlignedWriter {
@@ -143,7 +143,7 @@ impl Drop for AlignedWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aligned_reader::AlignedReader;
+    use crate::diskio::aligned_reader::AlignedReader;
 
     use std::fs;
     use std::io::Read;
@@ -313,7 +313,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let fd = create_test_file(dir.path(), "test.dat").unwrap();
 
-        let tracker = crate::io_stats::IoStatsTracker::new();
+        let tracker = IoStatsTracker::new();
 
         let mut writer = AlignedWriter::from_fd_with_tracker(fd, Some(tracker.clone())).unwrap();
 

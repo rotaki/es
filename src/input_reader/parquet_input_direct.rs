@@ -1,9 +1,8 @@
 //! Parquet file input with Direct I/O support
 
-use crate::file::SharedFd;
-use crate::{
-    IoStatsTracker, SortInput, aligned_reader::AlignedChunkReader, order_preserving_encoding::*,
-};
+use crate::diskio::aligned_reader::AlignedChunkReader;
+use crate::diskio::file::SharedFd;
+use crate::{IoStatsTracker, SortInput, order_preserving_encoding::*};
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
@@ -307,7 +306,8 @@ pub fn unix_epoch_to_ce_days(unix_epoch_days: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExternalSorter, Sorter};
+    use crate::Sorter;
+    use crate::sort::sorter::ExternalSorter;
     use arrow::array::{
         BinaryArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     };

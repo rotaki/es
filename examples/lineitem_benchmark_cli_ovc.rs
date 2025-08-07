@@ -8,6 +8,7 @@ use es::{
     CsvDirectConfig, CsvInputDirect, ExternalSorter, RunsOutput, SortInput, SortOutput, SortStats,
     order_preserving_encoding::decode_bytes,
 };
+use es::{ExternalSorterWithOVC, RunsOutputWithOVC};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
@@ -298,15 +299,19 @@ fn sort_lineitem(
                 let run_size_bytes =
                     ((params.run_size_mb * 1024.0 * 1024.0).max(1024.0 * 1024.0)) as usize;
 
-                let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
+                let (runs, sketch, run_gen_stats) = ExternalSorterWithOVC::run_generation(
                     input,
                     params.run_gen_threads as usize,
                     run_size_bytes,
                     &temp_dir,
                 )?;
 
-                let (_merged_runs, merge_stats) =
-                    ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
+                let (_merged_runs, merge_stats) = ExternalSorterWithOVC::merge(
+                    runs,
+                    params.merge_threads as usize,
+                    sketch,
+                    &temp_dir,
+                )?;
 
                 println!(
                     "{:.2}s",
@@ -353,15 +358,19 @@ fn sort_lineitem(
             let run_size_bytes =
                 ((params.run_size_mb * 1024.0 * 1024.0).max(1024.0 * 1024.0)) as usize;
 
-            let (runs, sketch, run_gen_stats) = ExternalSorter::run_generation(
+            let (runs, sketch, run_gen_stats) = ExternalSorterWithOVC::run_generation(
                 input,
                 params.run_gen_threads as usize,
                 run_size_bytes,
                 &temp_dir,
             )?;
 
-            let (merged_runs, merge_stats) =
-                ExternalSorter::merge(runs, params.merge_threads as usize, sketch, &temp_dir)?;
+            let (merged_runs, merge_stats) = ExternalSorterWithOVC::merge(
+                runs,
+                params.merge_threads as usize,
+                sketch,
+                &temp_dir,
+            )?;
 
             // Capture values before moving into SortStats
             let merge_entry_sum = merge_stats.merge_entry_num.iter().sum::<u64>() as usize;
@@ -433,7 +442,7 @@ fn sort_lineitem(
             // Verify if requested (only on first run)
             if verify && run == 1 {
                 println!("    Verifying sorted output...");
-                let output = Box::new(RunsOutput {
+                let output = Box::new(RunsOutputWithOVC {
                     runs: merged_runs,
                     stats: stats.clone(),
                 }) as Box<dyn SortOutput>;

@@ -1,6 +1,7 @@
-use crate::aligned_reader::AlignedReader;
-use crate::file::SharedFd;
-use crate::{IoStatsTracker, SortInput, file_size_fd};
+use crate::diskio::aligned_reader::AlignedReader;
+use crate::diskio::file::SharedFd;
+use crate::diskio::file::file_size_fd;
+use crate::{IoStatsTracker, SortInput};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;

@@ -5,13 +5,13 @@ use bytes::Bytes;
 use parquet::errors::Result as ParquetResult;
 use parquet::file::reader::{ChunkReader, Length};
 
-use crate::aligned_buffer::AlignedBuffer;
-use crate::constants::{
+use crate::diskio::aligned_buffer::AlignedBuffer;
+use crate::diskio::constants::{
     DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT, align_down, align_up, offset_within_block,
 };
-use crate::file::{SharedFd, pread_fd};
-use crate::file_size_fd;
-use crate::io_stats::IoStatsTracker;
+use crate::diskio::file::file_size_fd;
+use crate::diskio::file::{SharedFd, pread_fd};
+use crate::diskio::io_stats::IoStatsTracker;
 
 /// AlignedReader that uses GlobalFileManager for file operations
 pub struct AlignedReader {

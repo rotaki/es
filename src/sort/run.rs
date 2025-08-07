@@ -1,8 +1,9 @@
-use crate::aligned_reader::AlignedReader;
-use crate::aligned_writer::AlignedWriter;
-use crate::constants::{PAGE_SIZE, align_down};
-use crate::file::SharedFd;
-use crate::io_stats::IoStatsTracker;
+use crate::diskio::aligned_reader::AlignedReader;
+use crate::diskio::aligned_writer::AlignedWriter;
+use crate::diskio::constants::{PAGE_SIZE, align_down};
+use crate::diskio::file::SharedFd;
+use crate::diskio::io_stats::IoStatsTracker;
+use crate::ovc::offset_value_coding_u64::{OVCEntry64, OVCU64};
 use crate::rand::small_thread_rng;
 use rand::Rng;
 use std::io::{Read, Write};
@@ -23,7 +24,7 @@ pub struct RunImpl {
     total_entries: usize,
     start_bytes: usize,
     total_bytes: usize,
-    pub sparse_index: Vec<IndexEntry>,
+    sparse_index: Vec<IndexEntry>,
     reservoir_size: usize,
     entries_seen: usize, // For reservoir sampling
 }
@@ -89,8 +90,8 @@ impl RunImpl {
     }
 }
 
-impl super::Run for RunImpl {
-    fn append(&mut self, key: Vec<u8>, value: Vec<u8>) {
+impl RunImpl {
+    pub fn append(&mut self, key: Vec<u8>, value: Vec<u8>) {
         let writer = self
             .writer
             .as_mut()
@@ -129,7 +130,7 @@ impl super::Run for RunImpl {
         self.total_entries += 1;
     }
 
-    fn scan_range(
+    pub fn scan_range(
         &self,
         lower_inc: &[u8],
         upper_exc: &[u8],
@@ -137,7 +138,7 @@ impl super::Run for RunImpl {
         self.scan_range_with_io_tracker(lower_inc, upper_exc, None)
     }
 
-    fn scan_range_with_io_tracker(
+    pub fn scan_range_with_io_tracker(
         &self,
         lower_inc: &[u8],
         upper_exc: &[u8],
@@ -288,7 +289,6 @@ impl Iterator for RunIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Run;
     use std::path::PathBuf;
 
     fn get_test_path(name: &str) -> PathBuf {

@@ -1,4 +1,4 @@
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -36,7 +36,7 @@ fn test_parallel_merge_with_multiple_threads() {
         data.len()
     );
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -89,7 +89,7 @@ fn test_parallel_merge_boundary_conditions() {
     let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -122,7 +122,7 @@ fn test_parallel_merge_performance() {
         }
 
         let start1 = Instant::now();
-        let _ = sorter1.sort(Box::new(Input { data: data1 })).unwrap();
+        let _ = sorter1.sort(Box::new(InMemInput { data: data1 })).unwrap();
         let time1 = start1.elapsed();
 
         // Multiple threads
@@ -134,7 +134,7 @@ fn test_parallel_merge_performance() {
         }
 
         let start4 = Instant::now();
-        let _ = sorter4.sort(Box::new(Input { data: data4 })).unwrap();
+        let _ = sorter4.sort(Box::new(InMemInput { data: data4 })).unwrap();
         let time4 = start4.elapsed();
 
         println!(

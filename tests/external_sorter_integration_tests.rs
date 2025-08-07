@@ -11,7 +11,7 @@ fn test_dir() -> PathBuf {
     PathBuf::from("./test_runs")
 }
 
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -44,7 +44,7 @@ fn test_csv_like_data() {
     let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -72,7 +72,7 @@ fn test_json_like_keys() {
         data.push((key.into_bytes(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -119,7 +119,7 @@ fn test_url_sorting() {
         }
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -154,7 +154,7 @@ fn test_word_frequency_sorting() {
         data.push((key.into_bytes(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -195,7 +195,7 @@ fn test_ip_address_sorting() {
         data.push((ip.as_bytes().to_vec(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -229,7 +229,7 @@ fn test_genomic_data_sorting() {
         data.push((sequence, metadata.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -274,7 +274,7 @@ fn test_file_path_sorting() {
         data.push((path.into_bytes(), metadata.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -318,7 +318,7 @@ fn test_composite_key_sorting() {
         }
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -349,7 +349,7 @@ fn test_cleanup_on_drop() {
         for i in 0..1000 {
             data.push((format!("{:04}", i).into_bytes(), b"value".to_vec()));
         }
-        let input = Input { data };
+        let input = InMemInput { data };
         let _output = sorter.sort(Box::new(input)).unwrap();
     }
 
@@ -393,7 +393,7 @@ fn test_real_world_log_sorting() {
         data.push((timestamp.into_bytes(), message.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -420,7 +420,7 @@ fn test_case_sensitive_sorting() {
         data.push((word.as_bytes().to_vec(), b"value".to_vec()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();

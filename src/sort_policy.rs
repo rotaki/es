@@ -201,6 +201,16 @@ pub fn get_all_policies(config: SortConfig) -> Vec<(Policy, PolicyParameters)> {
         .collect()
 }
 
+pub fn get_policy_by_name(
+    name_prefix: &str,
+    config: SortConfig,
+) -> Option<(Policy, PolicyParameters)> {
+    Policy::all()
+        .into_iter()
+        .find(|p| p.name().starts_with(name_prefix))
+        .map(|p| (p, calculate_policy_parameters(p, config)))
+}
+
 /// Check if a policy configuration is feasible
 pub fn is_feasible(params: &PolicyParameters, memory_limit_mb: f64) -> bool {
     params.run_gen_memory_mb <= memory_limit_mb && params.merge_memory_mb <= memory_limit_mb

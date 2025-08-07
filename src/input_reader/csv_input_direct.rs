@@ -1,8 +1,9 @@
 //! CSV Input implementation using Direct I/O with BufReader
 
-use crate::aligned_reader::AlignedReader;
-use crate::file::SharedFd;
-use crate::{IoStatsTracker, SortInput, file_size_fd, order_preserving_encoding::*};
+use crate::diskio::aligned_reader::AlignedReader;
+use crate::diskio::file::SharedFd;
+use crate::diskio::file::file_size_fd;
+use crate::{IoStatsTracker, SortInput, order_preserving_encoding::*};
 use arrow::datatypes::{DataType, Schema};
 use chrono::Datelike;
 use std::io::Seek;
@@ -401,7 +402,8 @@ fn parse_csv_line(line: &str, delimiter: u8) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExternalSorter, Sorter};
+    use crate::Sorter;
+    use crate::sort::sorter::ExternalSorter;
     use arrow::datatypes::{DataType, Field, Schema};
     use std::fs::{self, File};
     use std::io::Write;

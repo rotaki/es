@@ -13,7 +13,7 @@
 //!   --help                       Show this help message
 
 use arrow::datatypes::{DataType, Field, Schema};
-use es::constants::DEFAULT_BUFFER_SIZE;
+use es::diskio::constants::DEFAULT_BUFFER_SIZE;
 use es::{
     CsvDirectConfig, CsvInputDirect, ExternalSorter, SortInput, Sorter,
     order_preserving_encoding::decode_bytes,

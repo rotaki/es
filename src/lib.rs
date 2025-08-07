@@ -7,30 +7,6 @@ pub trait Sorter {
     fn sort(&mut self, sort_input: Box<dyn SortInput>) -> Result<Box<dyn SortOutput>, String>;
 }
 
-pub trait SortBuffer {
-    fn is_empty(&self) -> bool;
-    fn has_space(&self, key: &[u8], value: &[u8]) -> bool;
-    fn append(&mut self, key: Vec<u8>, value: Vec<u8>) -> bool;
-    fn sort(&mut self);
-    fn drain(&mut self) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>;
-    fn reset(&mut self);
-}
-
-pub trait Run {
-    fn append(&mut self, key: Vec<u8>, value: Vec<u8>);
-    fn scan_range(
-        &self,
-        lower_inc: &[u8],
-        upper_exc: &[u8],
-    ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>;
-    fn scan_range_with_io_tracker(
-        &self,
-        lower_inc: &[u8],
-        upper_exc: &[u8],
-        io_tracker: Option<IoStatsTracker>,
-    ) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>;
-}
-
 // Input/Output traits
 pub trait SortInput {
     fn create_parallel_scanners(
@@ -221,35 +197,141 @@ impl std::fmt::Display for RunInfo {
     }
 }
 
+/// Statistics from the run generation phase
+#[derive(Clone, Debug)]
+pub struct RunGenerationStats {
+    pub num_runs: usize,
+    pub runs_info: Vec<RunInfo>,
+    pub time_ms: u128,
+    pub io_stats: Option<IoStats>,
+}
+
+/// Statistics from the merge phase
+#[derive(Clone, Debug)]
+pub struct MergeStats {
+    pub output_runs: usize,
+    pub merge_entry_num: Vec<u64>,
+    pub time_ms: u128,
+    pub io_stats: Option<IoStats>,
+}
+
+// Input implementation
+pub struct InMemInput {
+    pub data: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl SortInput for InMemInput {
+    fn create_parallel_scanners(
+        &self,
+        num_scanners: usize,
+        _io_tracker: Option<IoStatsTracker>,
+    ) -> Vec<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>> {
+        if self.data.is_empty() {
+            return vec![];
+        }
+
+        let chunk_size = self.data.len().div_ceil(num_scanners);
+        let mut scanners = Vec::new();
+
+        // Clone the data for each scanner since we can't move out of &self
+        let data = self.data.clone();
+        for chunk in data.chunks(chunk_size) {
+            let chunk_vec = chunk.to_vec();
+            scanners.push(Box::new(chunk_vec.into_iter())
+                as Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + Send>);
+        }
+
+        scanners
+    }
+}
+
+// Output implementation that materializes all data
+pub struct InMemOutput {
+    pub data: Vec<(Vec<u8>, Vec<u8>)>,
+    pub stats: Option<SortStats>,
+}
+
+impl SortOutput for InMemOutput {
+    fn iter(&self) -> Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        Box::new(self.data.clone().into_iter())
+    }
+
+    fn stats(&self) -> SortStats {
+        self.stats.clone().unwrap_or_else(|| {
+            // Default stats for in-memory output
+            SortStats {
+                num_runs: 1,
+                runs_info: vec![RunInfo {
+                    entries: self.data.len(),
+                    file_size: 0, // No file for in-memory data
+                }],
+                run_generation_time_ms: None,
+                merge_entry_num: vec![],
+                merge_time_ms: None,
+                run_generation_io_stats: None,
+                merge_io_stats: None,
+            }
+        })
+    }
+}
+
+// Shared directory info for cleanup coordination
+pub struct TempDirInfo {
+    path: PathBuf,
+    should_delete: bool,
+}
+
+impl TempDirInfo {
+    /// Create a new TempDirInfo with the specified path
+    pub fn new(path: impl AsRef<Path>, should_delete: bool) -> Self {
+        // Create the directory if it doesn't exist
+        let path = path.as_ref().to_path_buf();
+        if !path.exists() {
+            std::fs::create_dir_all(&path).expect("Failed to create temp directory");
+        }
+        Self {
+            path,
+            should_delete,
+        }
+    }
+}
+
+impl Drop for TempDirInfo {
+    fn drop(&mut self) {
+        if self.should_delete {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+impl AsRef<Path> for TempDirInfo {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 // Implementations
-pub mod aligned_buffer;
-pub mod aligned_reader;
-pub mod aligned_writer;
-pub mod constants;
-pub mod csv_input_direct;
-pub mod file;
-pub mod gensort_input_direct;
-pub mod io_stats;
+pub mod diskio;
+pub mod input_reader;
 pub mod kll;
-pub mod merge;
 pub mod order_preserving_encoding;
 pub mod ovc;
-pub mod parquet_input_direct;
 pub mod rand;
-pub mod run;
-pub mod sort_buffer;
+pub mod sort;
 pub mod sort_policy;
-pub mod sorter;
+pub mod sort_stats;
+pub mod sort_with_ovc;
+
+use std::path::{Path, PathBuf};
 
 // Export the main types
-pub use aligned_reader::{AlignedChunkReader, AlignedReader};
-pub use aligned_writer::AlignedWriter;
-pub use csv_input_direct::{CsvDirectConfig, CsvInputDirect};
-pub use file::{file_size_fd, pread_fd, pwrite_fd}; // , GlobalFileManager};
-pub use gensort_input_direct::GenSortInputDirect;
-pub use io_stats::{IoStats, IoStatsTracker};
-pub use parquet_input_direct::{ParquetDirectConfig, ParquetInputDirect};
-pub use run::RunImpl;
-pub use sorter::{
-    ExternalSorter, Input, MergeStats, Output, RunGenerationStats, RunsOutput, TempDirInfo,
-};
+pub use diskio::aligned_reader::{AlignedChunkReader, AlignedReader};
+pub use diskio::aligned_writer::AlignedWriter;
+pub use diskio::file::{file_size_fd, pread_fd, pwrite_fd}; // , GlobalFileManager};
+pub use diskio::io_stats::{IoStats, IoStatsTracker};
+pub use input_reader::csv_input_direct::{CsvDirectConfig, CsvInputDirect};
+pub use input_reader::gensort_input_direct::GenSortInputDirect;
+pub use input_reader::parquet_input_direct::{ParquetDirectConfig, ParquetInputDirect};
+pub use sort::run::RunImpl;
+pub use sort::sorter::{ExternalSorter, RunsOutput};
+pub use sort_with_ovc::sorter_with_ovc::{ExternalSorterWithOVC, RunsOutputWithOVC};

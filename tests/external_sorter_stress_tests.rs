@@ -1,4 +1,4 @@
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -29,7 +29,7 @@ fn test_very_large_dataset() {
         data.push((key.into_bytes(), value.into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -69,7 +69,7 @@ fn test_pathological_key_distribution() {
         data.push((b"same_key".to_vec(), format!("v3_{}", i).into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -94,7 +94,7 @@ fn test_memory_pressure() {
         data.push((key.into_bytes(), value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -120,7 +120,7 @@ fn test_extreme_thread_counts() {
             data.push((key.into_bytes(), b"value".to_vec()));
         }
 
-        let input = Input { data };
+        let input = InMemInput { data };
         let output = sorter.sort(Box::new(input)).unwrap();
 
         let results: Vec<_> = output.iter().collect();
@@ -148,7 +148,7 @@ fn test_max_memory_edge_cases() {
             data.push((key.into_bytes(), value.into_bytes()));
         }
 
-        let input = Input { data };
+        let input = InMemInput { data };
         let output = sorter.sort(Box::new(input)).unwrap();
 
         let results: Vec<_> = output.iter().collect();
@@ -185,7 +185,7 @@ fn test_concurrent_massive_sorts() {
                 let mut rng = rand::rng();
                 data.shuffle(&mut rng);
 
-                let input = Input { data };
+                let input = InMemInput { data };
                 let output = sorter.sort(Box::new(input)).unwrap();
 
                 let results: Vec<_> = output.iter().collect();
@@ -214,7 +214,7 @@ fn test_all_identical_keys() {
         data.push((b"same".to_vec(), i.to_string().into_bytes()));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -245,7 +245,7 @@ fn test_alternating_small_large() {
         }
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -281,7 +281,7 @@ fn test_random_binary_keys() {
         data.push((key, value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -311,7 +311,7 @@ fn test_progressive_key_lengths() {
     let mut rng = rand::rng();
     data.shuffle(&mut rng);
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -337,7 +337,7 @@ fn test_interleaved_runs() {
         }
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();
@@ -368,7 +368,7 @@ fn test_stress_file_handles() {
                     data.push((key.into_bytes(), b"val".to_vec()));
                 }
 
-                let input = Input { data };
+                let input = InMemInput { data };
                 let output = sorter.sort(Box::new(input)).unwrap();
                 let results: Vec<_> = output.iter().collect();
                 assert_eq!(results.len(), 1000);
@@ -396,7 +396,7 @@ fn test_max_value_sizes() {
         data.push((key.into_bytes(), value));
     }
 
-    let input = Input { data };
+    let input = InMemInput { data };
     let output = sorter.sort(Box::new(input)).unwrap();
 
     let results: Vec<_> = output.iter().collect();

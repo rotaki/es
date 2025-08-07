@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::{io, os::fd::IntoRawFd};
 
-use crate::constants::{DIRECT_IO_ALIGNMENT, open_file_with_direct_io};
+use crate::diskio::constants::{DIRECT_IO_ALIGNMENT, open_file_with_direct_io};
 
 pub struct SharedFd {
     fd: RawFd,

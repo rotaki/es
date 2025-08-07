@@ -1,4 +1,4 @@
-use es::{ExternalSorter, Input, Sorter};
+use es::{ExternalSorter, InMemInput, Sorter};
 use std::fs;
 use std::path::PathBuf;
 
@@ -26,7 +26,7 @@ fn test_external_sorter_cleanup() {
             data.push((key.into_bytes(), value));
         }
 
-        let input = Input { data };
+        let input = InMemInput { data };
         let output = sorter.sort(Box::new(input)).unwrap();
 
         // Consume output to ensure everything is processed
