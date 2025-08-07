@@ -82,29 +82,29 @@ echo "Mode,Sort_Time_s,Throughput_MB_s,Peak_Memory_MB,Total_IO_MB,Avg_Key_Size,A
 
 # Run without OVC
 echo -e "${BLUE}\n>>> Running benchmark WITHOUT OVC...${NC}"
-OUTPUT_NO_OVC=$($BINARY \
+$BINARY \
     -i "$INPUT_FILE" \
     -m "$MEMORY_MB" \
     -t "$THREADS" \
     --benchmark-runs "$BENCHMARK_RUNS" \
     --warmup-runs "$WARMUP_RUNS" \
-    --verify 2>&1)
+    --verify 2>&1 | tee "$RESULTS_DIR/no_ovc_output.txt"
 
-echo "$OUTPUT_NO_OVC" > "$RESULTS_DIR/no_ovc_output.txt"
+OUTPUT_NO_OVC=$(cat "$RESULTS_DIR/no_ovc_output.txt")
 extract_metrics "$OUTPUT_NO_OVC" "Without OVC"
 
 # Run with OVC
 echo -e "${BLUE}\n>>> Running benchmark WITH OVC...${NC}"
-OUTPUT_WITH_OVC=$($BINARY \
+$BINARY \
     -i "$INPUT_FILE" \
     -m "$MEMORY_MB" \
     -t "$THREADS" \
     --benchmark-runs "$BENCHMARK_RUNS" \
     --warmup-runs "$WARMUP_RUNS" \
     --verify \
-    --ovc 2>&1)
+    --ovc 2>&1 | tee "$RESULTS_DIR/with_ovc_output.txt"
 
-echo "$OUTPUT_WITH_OVC" > "$RESULTS_DIR/with_ovc_output.txt"
+OUTPUT_WITH_OVC=$(cat "$RESULTS_DIR/with_ovc_output.txt")
 extract_metrics "$OUTPUT_WITH_OVC" "With OVC"
 
 # Calculate and display comparison
