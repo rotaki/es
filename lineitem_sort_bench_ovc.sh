@@ -87,8 +87,7 @@ $BINARY \
     -m "$MEMORY_MB" \
     -t "$THREADS" \
     --benchmark-runs "$BENCHMARK_RUNS" \
-    --warmup-runs "$WARMUP_RUNS" \
-    --verify 2>&1 | tee "$RESULTS_DIR/no_ovc_output.txt"
+    --warmup-runs "$WARMUP_RUNS" 2>&1 | tee "$RESULTS_DIR/no_ovc_output.txt"
 
 OUTPUT_NO_OVC=$(cat "$RESULTS_DIR/no_ovc_output.txt")
 extract_metrics "$OUTPUT_NO_OVC" "Without OVC"
@@ -101,7 +100,6 @@ $BINARY \
     -t "$THREADS" \
     --benchmark-runs "$BENCHMARK_RUNS" \
     --warmup-runs "$WARMUP_RUNS" \
-    --verify \
     --ovc 2>&1 | tee "$RESULTS_DIR/with_ovc_output.txt"
 
 OUTPUT_WITH_OVC=$(cat "$RESULTS_DIR/with_ovc_output.txt")
