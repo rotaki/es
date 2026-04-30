@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy gensort_200GiB.data from HDD (/tank) to local NVMe, run the Myung
-# baseline sweep, then clean up the local copy. Mirrors scripts/run_both_bench.sh.
+# Copy gensort_200GiB.data from HDD (/tank) to local NVMe (skipped if already
+# present), run the Myung baseline sweep. The dataset copy is RETAINED on
+# exit so subsequent runs skip the slow HDD→NVMe copy. Only the scratch
+# directory (intermediate run files) is cleaned up.
 #
 # Run from the repo root.
 #
@@ -16,6 +18,11 @@ set -euo pipefail
 #   SAMPLE_RATIO   default 0.001
 #
 # Override the source dataset path with GENSORT_SRC=...
+#
+# To force cleanup of the local dataset (e.g. to free disk space):
+#   KEEP_DATASET=0 baselines/myung/scripts/run_myung_bench.sh
+# Or just delete it manually when you're done benchmarking:
+#   rm ./datasets/gensort_200GiB.data
 
 # ── paths ────────────────────────────────────────────────────────────────────
 DATASETS_DIR="./datasets"
@@ -42,10 +49,16 @@ print_disk_info() {
 }
 
 cleanup() {
-  if [[ -f "${GENSORT_LOCAL}" && "${KEEP_LOCAL_COPY:-0}" != "1" ]]; then
-    echo "[cleanup] Removing $(basename "${GENSORT_LOCAL}")..."
+  # Keep the local dataset by default — the HDD→NVMe copy is slow and a
+  # repeated sweep should reuse what's already on the SSD. Set KEEP_DATASET=0
+  # to force removal (e.g. to free space when finished).
+  if [[ -f "${GENSORT_LOCAL}" && "${KEEP_DATASET:-1}" != "1" ]]; then
+    echo "[cleanup] KEEP_DATASET=0 → removing $(basename "${GENSORT_LOCAL}")..."
     rm -f "${GENSORT_LOCAL}"
+  elif [[ -f "${GENSORT_LOCAL}" ]]; then
+    echo "[cleanup] keeping $(basename "${GENSORT_LOCAL}") at ${GENSORT_LOCAL} (KEEP_DATASET=1)"
   fi
+  # Scratch is always nuked — it's just intermediate run files, useless after.
   if [[ -d "${SCRATCH_DIR}" ]]; then
     echo "[cleanup] Removing scratch dir ${SCRATCH_DIR}..."
     rm -rf "${SCRATCH_DIR}"

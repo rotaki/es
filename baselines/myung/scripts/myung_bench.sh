@@ -45,6 +45,24 @@ SLEEP_BETWEEN_CONFIGS_SECONDS="${SLEEP_BETWEEN_CONFIGS_SECONDS:-30}"
 # not installed.
 RCLONE_REMOTE="${RCLONE_REMOTE-gdrive:bench_results/myung_gensort}"
 
+# ── raise NOFILE soft limit to the hard cap ─────────────────────────────────
+# Default Ubuntu soft limit is 1024, which is too low: 16 threads × 16 range
+# writers + scanners + I/O state easily blows past it. Raise the soft limit
+# all the way to the hard cap so we never hit EMFILE during a sweep. No sudo
+# required (raising soft up to hard is always allowed).
+NOFILE_HARD="$(ulimit -Hn 2>/dev/null || echo 1024)"
+if [[ "$NOFILE_HARD" == "unlimited" ]]; then
+  # Pick something extremely large and let the kernel cap at 1<<20 if needed.
+  NOFILE_TARGET=1048576
+else
+  NOFILE_TARGET="$NOFILE_HARD"
+fi
+# Allow user override if they really want lower (e.g. paranoia).
+NOFILE_TARGET="${NOFILE_TARGET_OVERRIDE:-$NOFILE_TARGET}"
+ulimit -n "$NOFILE_TARGET" 2>/dev/null || \
+  echo "WARN: could not raise NOFILE to $NOFILE_TARGET (current $(ulimit -n))" >&2
+echo "[bench] NOFILE soft=$(ulimit -n) hard=$(ulimit -Hn)"
+
 BIN="$(dirname "$0")/../../../target/release/examples/myung_sort_cli"
 if [[ ! -x "$BIN" ]]; then
   echo "building myung_sort_cli..." >&2
@@ -119,13 +137,14 @@ run_with_cgroup_limits() {
 
   local limit_bytes=$((cgroup_mib * 1024 * 1024))
   local unit_name="myung-${scope_name}-${DATASET_NAME_SAFE}-$$-$(date +%s)"
-  echo "[cgroup] ${scope_name}: MemoryMax=${cgroup_mib}MiB, swap=0"
+  echo "[cgroup] ${scope_name}: MemoryMax=${cgroup_mib}MiB, swap=0, NOFILE=${NOFILE_TARGET}"
   systemd-run --user --scope --quiet --collect \
       --unit "${unit_name}" \
       --property "MemoryAccounting=yes" \
       --property "MemoryHigh=${limit_bytes}" \
       --property "MemoryMax=${limit_bytes}" \
       --property "MemorySwapMax=0" \
+      --property "LimitNOFILE=${NOFILE_TARGET}" \
       -- "$@"
 }
 

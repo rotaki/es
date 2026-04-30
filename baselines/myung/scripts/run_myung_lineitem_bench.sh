@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copy lineitem .kvbin + .kvbin.idx from HDD (/tank) to local NVMe, run the
-# Myung kvbin sweep, then clean up. Sibling of run_myung_bench.sh.
+# Copy lineitem .kvbin + .kvbin.idx from HDD (/tank) to local NVMe (skipped
+# if already present), then run the Myung kvbin sweep. The dataset copies
+# are RETAINED on exit so subsequent runs skip the slow HDD copy. Only the
+# scratch directory is cleaned up. Set KEEP_DATASET=0 to force dataset
+# removal. Sibling of run_myung_bench.sh.
 #
 # Run from the repo root.
 #
@@ -49,10 +52,16 @@ glob_exists() {
 declare -a COPIED_FILES=()
 
 cleanup() {
-  if [[ ${#COPIED_FILES[@]} -gt 0 ]]; then
-    echo "[cleanup] Removing ${#COPIED_FILES[@]} copied lineitem file(s)..."
+  # Keep the local dataset + idx by default — the HDD→NVMe copy is slow and
+  # a repeated sweep should reuse what's already on the SSD. Set KEEP_DATASET=0
+  # to force removal (e.g. to free space when finished).
+  if [[ ${#COPIED_FILES[@]} -gt 0 && "${KEEP_DATASET:-1}" != "1" ]]; then
+    echo "[cleanup] KEEP_DATASET=0 → removing ${#COPIED_FILES[@]} copied lineitem file(s)..."
     rm -f "${COPIED_FILES[@]}"
+  elif [[ ${#COPIED_FILES[@]} -gt 0 ]]; then
+    echo "[cleanup] keeping ${#COPIED_FILES[@]} copied lineitem file(s) in ${DATASETS_DIR} (KEEP_DATASET=1)"
   fi
+  # Scratch is always nuked — it's just intermediate run files.
   if [[ -d "${SCRATCH_DIR}" ]]; then
     echo "[cleanup] Removing scratch dir ${SCRATCH_DIR}..."
     rm -rf "${SCRATCH_DIR}"
