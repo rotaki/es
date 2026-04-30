@@ -21,7 +21,8 @@
 #   SAMPLE_RATIO                   default: 0.001
 #   SAMPLE_RECORDS_PER_ANCHOR      default: 8
 #   CGROUP_MODE                    default: "on"   ("on"|"strict"|"off")
-#   RCLONE_REMOTE                  default: ""     ("" disables upload)
+#   RCLONE_REMOTE                  default: "gdrive:bench_results/myung_lineitem"
+#                                  (set to "" to disable upload)
 #   SLEEP_BETWEEN_CONFIGS_SECONDS  default: 30
 
 set -euo pipefail
@@ -40,7 +41,7 @@ ARB_LIST="${ARB_LIST:-on}"
 SAMPLE_RATIO="${SAMPLE_RATIO:-0.001}"
 SAMPLE_RECORDS_PER_ANCHOR="${SAMPLE_RECORDS_PER_ANCHOR:-8}"
 CGROUP_MODE="${CGROUP_MODE:-on}"
-RCLONE_REMOTE="${RCLONE_REMOTE:-}"
+RCLONE_REMOTE="${RCLONE_REMOTE-gdrive:bench_results/myung_lineitem}"
 SLEEP_BETWEEN_CONFIGS_SECONDS="${SLEEP_BETWEEN_CONFIGS_SECONDS:-30}"
 
 if [[ ! -f "$INPUT_DATA" ]]; then
@@ -120,20 +121,22 @@ run_with_cgroup_limits() {
       -- "$@"
 }
 
+# Sync the CSV + log file to a Drive folder named after the CSV's stem.
+# Idempotent — safe to call after every row, picks up only changed files.
+# Silently no-ops if RCLONE_REMOTE is empty or `rclone` isn't installed.
 upload_logs() {
   if [[ -z "${RCLONE_REMOTE:-}" ]]; then
     return 0
   fi
   if ! command -v rclone >/dev/null 2>&1; then
-    echo "rclone not found, skipping upload." >&2
     return 0
   fi
   local dest="${RCLONE_REMOTE}/$(basename "$OUT_CSV" .csv)"
-  echo "Uploading $OUT_CSV -> $dest ..."
-  if rclone copy "$OUT_CSV" "$dest" --progress; then
-    echo "Upload complete: $dest"
-  else
-    echo "Warning: rclone upload failed (exit $?)" >&2
+  rclone copy "$OUT_CSV"   "$dest" --quiet 2>/dev/null || \
+    echo "Warning: rclone upload of CSV failed" >&2
+  if [[ -f "$LOG_FILE" ]]; then
+    rclone copy "$LOG_FILE" "$dest" --quiet 2>/dev/null || \
+      echo "Warning: rclone upload of LOG failed" >&2
   fi
 }
 
@@ -202,6 +205,7 @@ for CGROUP_MIB in $MEM_MIB_LIST_DESC; do
           echo "FAIL: ${SCOPE_NAME} exit=$RC (last line: $(echo "$RAW" | tail -1))" >&2
           echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,,,$ARB,$RUN,exit_${RC},,,,," \
             | tee -a "$OUT_CSV"
+          upload_logs
           abort_remaining=1
           break
         fi
@@ -221,12 +225,14 @@ for CGROUP_MIB in $MEM_MIB_LIST_DESC; do
           echo "FAIL: ${SCOPE_NAME} parse_fail (last line: $OUT)" >&2
           echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,,,$ARB,$RUN,parse_fail,,,,," \
             | tee -a "$OUT_CSV"
+          upload_logs
           abort_remaining=1
           break
         fi
 
         echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,$T_USER,$T_EFF,$ARB,$RUN,ok,$TOTAL,$RF,$MG,$RUNSCOUNT,$RANGES" \
           | tee -a "$OUT_CSV"
+        upload_logs
 
         cooldown
       done
@@ -240,6 +246,8 @@ if [[ "$abort_remaining" -eq 1 ]]; then
   echo "[sweep] aborted at smaller memory levels because the previous failed." >&2
 fi
 
+# Final sync: per-row uploads already cover this, but a last call covers any
+# late stderr appended to the log file after the last successful row.
 upload_logs
 echo "[sweep] CSV: $OUT_CSV"
 echo "[sweep] log: $LOG_FILE"

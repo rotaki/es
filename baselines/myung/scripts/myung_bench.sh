@@ -22,6 +22,8 @@
 #   ARB_LIST     (space-separated)   default: "on"  (set "on off" to A/B)
 #   SAMPLE_RATIO                     default: 0.001
 #   CGROUP_MODE                      default: "on"  ("on"|"strict"|"off")
+#   RCLONE_REMOTE                    default: "gdrive:bench_results/myung_gensort"
+#                                    (set to "" to disable upload)
 
 set -euo pipefail
 
@@ -38,6 +40,10 @@ ARB_LIST="${ARB_LIST:-on}"
 SAMPLE_RATIO="${SAMPLE_RATIO:-0.001}"
 CGROUP_MODE="${CGROUP_MODE:-on}"
 SLEEP_BETWEEN_CONFIGS_SECONDS="${SLEEP_BETWEEN_CONFIGS_SECONDS:-30}"
+# Auto-upload results to Drive (matches gensort_sort_bench_new.sh:16). Set to
+# "" to disable, or override the remote path. rclone is silently skipped if
+# not installed.
+RCLONE_REMOTE="${RCLONE_REMOTE-gdrive:bench_results/myung_gensort}"
 
 BIN="$(dirname "$0")/../../../target/release/examples/myung_sort_cli"
 if [[ ! -x "$BIN" ]]; then
@@ -66,6 +72,25 @@ clear_cache_if_available() {
   elif [[ -w /proc/sys/vm/drop_caches ]]; then
     sync
     echo 3 > /proc/sys/vm/drop_caches || true
+  fi
+}
+
+# Sync the CSV + log file to a Drive folder named after the CSV's stem.
+# Idempotent — safe to call after every row, picks up only changed files.
+# Silently no-ops if RCLONE_REMOTE is empty or `rclone` isn't installed.
+upload_logs() {
+  if [[ -z "${RCLONE_REMOTE:-}" ]]; then
+    return 0
+  fi
+  if ! command -v rclone >/dev/null 2>&1; then
+    return 0
+  fi
+  local dest="${RCLONE_REMOTE}/$(basename "$OUT_CSV" .csv)"
+  rclone copy "$OUT_CSV"   "$dest" --quiet 2>/dev/null || \
+    echo "Warning: rclone upload of CSV failed" >&2
+  if [[ -f "$LOG_FILE" ]]; then
+    rclone copy "$LOG_FILE" "$dest" --quiet 2>/dev/null || \
+      echo "Warning: rclone upload of LOG failed" >&2
   fi
 }
 
@@ -171,6 +196,7 @@ for CGROUP_MIB in $MEM_MIB_LIST_DESC; do
           echo "FAIL: ${SCOPE_NAME} exit=$RC (last line: $(echo "$RAW" | tail -1))" >&2
           echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,,,$ARB,$RUN,exit_${RC},,,,," \
             | tee -a "$OUT_CSV"
+          upload_logs
           abort_remaining=1
           break  # don't try remaining trials at this memory level
         fi
@@ -190,12 +216,14 @@ for CGROUP_MIB in $MEM_MIB_LIST_DESC; do
           echo "FAIL: ${SCOPE_NAME} parse_fail (last line: $OUT)" >&2
           echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,,,$ARB,$RUN,parse_fail,,,,," \
             | tee -a "$OUT_CSV"
+          upload_logs
           abort_remaining=1
           break
         fi
 
         echo "myung,$DATASET_LABEL,$CGROUP_MIB,$APP_MIB,$T_USER,$T_EFF,$ARB,$RUN,ok,$TOTAL,$RF,$MG,$RUNSCOUNT,$RANGES" \
           | tee -a "$OUT_CSV"
+        upload_logs
 
         cooldown
       done
