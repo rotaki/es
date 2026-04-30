@@ -138,14 +138,17 @@ run_with_cgroup_limits() {
   local limit_bytes=$((cgroup_mib * 1024 * 1024))
   local unit_name="myung-${scope_name}-${DATASET_NAME_SAFE}-$$-$(date +%s)"
   echo "[cgroup] ${scope_name}: MemoryMax=${cgroup_mib}MiB, swap=0, NOFILE=${NOFILE_TARGET}"
+  # Note: systemd 249 rejects LimitNOFILE on scope units ("Unknown assignment").
+  # Scopes also inherit their session default (typically soft=1024), NOT the
+  # parent shell's bumped soft limit. So bump it inside the scope via a
+  # one-line bash wrapper before exec'ing the binary.
   systemd-run --user --scope --quiet --collect \
       --unit "${unit_name}" \
       --property "MemoryAccounting=yes" \
       --property "MemoryHigh=${limit_bytes}" \
       --property "MemoryMax=${limit_bytes}" \
       --property "MemorySwapMax=0" \
-      --property "LimitNOFILE=${NOFILE_TARGET}" \
-      -- "$@"
+      -- bash -c 'ulimit -n '"${NOFILE_TARGET}"' && exec "$@"' _ "$@"
 }
 
 # ── header (note: memory_mib = app budget, cgroup_mib = OS hard cap) ────────

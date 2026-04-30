@@ -128,14 +128,16 @@ run_with_cgroup_limits() {
   local limit_bytes=$((cgroup_mib * 1024 * 1024))
   local unit_name="myung-${scope_name}-${DATASET_NAME_SAFE}-$$-$(date +%s)"
   echo "[cgroup] ${scope_name}: MemoryMax=${cgroup_mib}MiB, swap=0, NOFILE=${NOFILE_TARGET}"
+  # Note: systemd 249 rejects LimitNOFILE on scope units. Scopes also inherit
+  # session default soft NOFILE (typically 1024), NOT the parent shell's
+  # bumped value. Bump inside the scope via a bash wrapper.
   systemd-run --user --scope --quiet --collect \
       --unit "${unit_name}" \
       --property "MemoryAccounting=yes" \
       --property "MemoryHigh=${limit_bytes}" \
       --property "MemoryMax=${limit_bytes}" \
       --property "MemorySwapMax=0" \
-      --property "LimitNOFILE=${NOFILE_TARGET}" \
-      -- "$@"
+      -- bash -c 'ulimit -n '"${NOFILE_TARGET}"' && exec "$@"' _ "$@"
 }
 
 # Sync the CSV + log file to a Drive folder named after the CSV's stem.
