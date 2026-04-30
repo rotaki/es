@@ -15,19 +15,20 @@ Given:
 - `T_max`: max threads (`max_threads`)
 - `P`: page size in MB (`page_size_kb / 1024`)
 - `rho`: usable-memory ratio (fixed at `0.8` in planner)
-- `sparse_index_fraction`: reserved memory fraction for sparse index
+- `sparse_index_fraction`: reserved memory fraction for merge-side sparse index
 - `min_rg_buf_mb`: minimum per-thread run-generation buffer target (default `40 MB`)
 
 Derived:
 
-- `M_eff = (rho * M) * (1 - sparse_index_fraction)`
+- `M_run_gen = rho * M`
+- `M_merge = (rho * M) * (1 - sparse_index_fraction)`
 
 ## Step 1: Regime Detection
 
 Compute:
 
 - `E = replacement-selection run-expansion assumption` (planner uses `E = 1`)
-- `threshold = E * M_eff^2 / (D * P)`
+- `threshold = E * M_run_gen * M_merge / (D * P)`
 
 Regime:
 
@@ -39,11 +40,11 @@ Regime:
 Use this compact version when planning:
 
 1. `T_merge = T_max`
-2. `max_fanin_in_budget = floor(M_eff / (T_merge * P)) - 1`
+2. `max_fanin_in_budget = floor(M_merge / (T_merge * P)) - 1`
 3. `rg_buf_min = D / max_fanin_in_budget`  
    This is the K=1 bound under `E = 1`.
 4. `rg_buf_target = max(min_rg_buf_mb, rg_buf_min)`
-5. If `rg_buf_target > (M_eff / T_gen)`, reduce `T_gen` until it fits.
+5. If `rg_buf_target > (M_run_gen / T_gen)`, reduce `T_gen` until it fits.
 6. Keep `merge_fanin = max_fanin_in_budget`.
 
 This keeps estimates simple and consistent with `E = 1`.
@@ -53,18 +54,18 @@ This keeps estimates simple and consistent with `E = 1`.
 ### Memory-bound
 
 - Start from `T_gen = T_max`
-- If `(M_eff / T_gen) < min_rg_buf_mb`, shrink `T_gen` to:
-  - `T_gen = floor(M_eff / min_rg_buf_mb)` (clamped to `[1, T_max]`)
+- If `(M_run_gen / T_gen) < min_rg_buf_mb`, shrink `T_gen` to:
+  - `T_gen = floor(M_run_gen / min_rg_buf_mb)` (clamped to `[1, T_max]`)
 - `T_merge = floor(threshold / T_gen)`
 - Clamp `T_merge` to `[1, T_max]`
-- `rg_buf_mb = M_eff / T_gen`
+- `rg_buf_mb = M_run_gen / T_gen`
 
 ### Thread-bound
 
 - Start from `T_gen = T_merge = T_max`
 - If needed, shrink `T_gen` with the same floor rule as above so
   `rg_buf_mb` can reach at least `min_rg_buf_mb`
-- `max_fanin_in_budget = floor(M_eff / (T_merge * P)) - 1` (minimum 2)
+- `max_fanin_in_budget = floor(M_merge / (T_merge * P)) - 1` (minimum 2)
 - Estimated runs use `num_runs ≈ D / rg_buf_mb` under `E = 1`.
 - K=1 requirement: `num_runs <= merge_fanin`
 - Budget cap: `merge_fanin <= max_fanin_in_budget`
@@ -75,7 +76,7 @@ This keeps estimates simple and consistent with `E = 1`.
   - `rg_buf_min = D / max_fanin_in_budget` (K=1 lower bound under `E = 1`)
 - Final choice:
   - `rg_buf_target = max(min_rg_buf_mb, rg_buf_min)`
-  - `rg_buf_mb = min(rg_buf_target, M_eff / T_gen)`
+  - `rg_buf_mb = min(rg_buf_target, M_run_gen / T_gen)`
 
 ## Step 3: Choose `merge_fanin` and `single_step`
 
@@ -83,7 +84,7 @@ Compute:
 
 - `num_runs = ceil(D / rg_buf_mb)`
 - `required_fanin_k1 = num_runs`
-- `max_fanin_in_budget = floor(M_eff / (T_merge * P)) - 1` (minimum 2)
+- `max_fanin_in_budget = floor(M_merge / (T_merge * P)) - 1` (minimum 2)
 
 Then:
 
@@ -104,18 +105,18 @@ Inputs from a real run setup:
 Step-by-step:
 
 1. Effective memory:
-   - `M_eff = (rho * M) * (1 - sparse_index_fraction)`
-   - `M_eff = (0.8 * 29491) * 0.95 = 22413.16 MB`
+   - `M_run_gen = rho * M = 0.8 * 29491 = 23592.80 MB`
+   - `M_merge = (rho * M) * (1 - sparse_index_fraction) = 22413.16 MB`
 2. Threshold:
-   - `threshold = E * M_eff^2 / (D * P)` with `E = 1`
-   - `threshold = 40256.52`
-   - `T_max^2 = 256 <= 40256.52`, so regime is `ThreadBound`.
+   - `threshold = E * M_run_gen * M_merge / (D * P)` with `E = 1`
+   - `threshold = 42375.3`
+   - `T_max^2 = 256 <= 42375.3`, so regime is `ThreadBound`.
 3. Thread-bound settings:
    - `T_gen = T_merge = 16`
    - `max_fanin_in_budget = floor(22413.16 / (16 * 0.0625)) - 1 = 22412`
    - `rg_buf_min = D / max_fanin_in_budget = 8.9086 MB` (under `E = 1`)
    - `rg_buf_target = max(min_rg_buf_mb, rg_buf_min) = max(40.0, 8.9086) = 40.0 MB`
-   - `rg_buf_mb = min(rg_buf_target, M_eff / T_gen) = min(40.0, 1400.82) = 40.0 MB`
+   - `rg_buf_mb = min(rg_buf_target, M_run_gen / T_gen) = min(40.0, 1474.55) = 40.0 MB`
 4. Estimated runs and single-step flag:
    - `num_runs = ceil(D / rg_buf_mb) = ceil(199659.46 / 40.0) = 4992`
    - `merge_fanin = 22412`
@@ -125,9 +126,10 @@ Rounded planner-style values for this example:
 
 - `T_gen=16, T_merge=16, rg_buf=40.0 MB, fanin=22412, runs=4992, run_gen_mem=640.0 MB, merge_mem=22412.0 MB, single_step=true`
 
-Observed value from one real benchmark run with the same input/budget:
+Observed value from one real benchmark run with the same input/budget family,
+but different older planner setting (`rg_buf=3.84 MB`):
 
-- `actual generated runs = 42818` (higher than estimate; effective expansion in that run was about `D / (actual_runs * rg_buf_mb) ~= 1.21` instead of `2.0`)
+- `actual generated runs = 42818` (with `rg_buf=3.84 MB`, implied effective expansion `D / (actual_runs * rg_buf_mb) ~= 1.21`)
 
 ## Worked Example (GenSort 200 GiB, 28.8 GB Budget)
 
@@ -143,18 +145,18 @@ Inputs:
 Step-by-step:
 
 1. Effective memory:
-   - `M_eff = (rho * M) * (1 - sparse_index_fraction)`
-   - `M_eff = (0.8 * 29491) * 0.95 = 22413.16 MB`
+   - `M_run_gen = rho * M = 0.8 * 29491 = 23592.80 MB`
+   - `M_merge = (rho * M) * (1 - sparse_index_fraction) = 22413.16 MB`
 2. Threshold:
-   - `threshold = E * M_eff^2 / (D * P)` with `E = 1`
-   - `threshold = 39246.07`
-   - `T_max^2 = 256 <= 39246.07`, so regime is `ThreadBound`.
+   - `threshold = E * M_run_gen * M_merge / (D * P)` with `E = 1`
+   - `threshold = 41311.7`
+   - `T_max^2 = 256 <= 41311.7`, so regime is `ThreadBound`.
 3. Thread-bound settings:
    - `T_gen = T_merge = 16`
    - `max_fanin_in_budget = floor(22413.16 / (16 * 0.0625)) - 1 = 22412`
    - `rg_buf_min = D / max_fanin_in_budget = 9.1380 MB` (under `E = 1`)
    - `rg_buf_target = max(min_rg_buf_mb, rg_buf_min) = max(40.0, 9.1380) = 40.0 MB`
-   - `rg_buf_mb = min(rg_buf_target, M_eff / T_gen) = min(40.0, 1400.82) = 40.0 MB`
+   - `rg_buf_mb = min(rg_buf_target, M_run_gen / T_gen) = min(40.0, 1474.55) = 40.0 MB`
 4. Estimated runs and single-step flag:
    - `num_runs = ceil(D / rg_buf_mb) = ceil(204800 / 40.0) = 5120`
    - `merge_fanin = 22412`

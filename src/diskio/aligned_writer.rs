@@ -51,6 +51,27 @@ impl AlignedWriter {
         })
     }
 
+    /// Create an AlignedWriter with a caller-chosen internal buffer size.
+    /// `buffer_size` must be a multiple of `DIRECT_IO_ALIGNMENT` (512).
+    /// Used by external callers (e.g., the Myung baseline) that need to match
+    /// a device-specific chunk size such as NVMe MDTS.
+    pub fn from_fd_with_buffer_size(fd: Arc<SharedFd>, buffer_size: usize) -> io::Result<Self> {
+        if buffer_size == 0 || buffer_size % DIRECT_IO_ALIGNMENT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "buffer_size must be a non-zero multiple of DIRECT_IO_ALIGNMENT",
+            ));
+        }
+        Ok(Self {
+            fd,
+            buffer: AlignedBuffer::new(buffer_size, DIRECT_IO_ALIGNMENT)?,
+            file_offset: 0,
+            buffer_pos: 0,
+            logical_pos: 0,
+            io_tracker: None,
+        })
+    }
+
     pub fn get_fd(&self) -> Arc<SharedFd> {
         self.fd.clone()
     }
@@ -113,9 +134,10 @@ impl AlignedWriter {
 impl Write for AlignedWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut total_written = 0;
+        let cap = self.buffer.capacity();
 
         while total_written < buf.len() {
-            let available = DEFAULT_BUFFER_SIZE - self.buffer_pos;
+            let available = cap - self.buffer_pos;
             let to_copy = std::cmp::min(buf.len() - total_written, available);
 
             // Copy data to buffer
@@ -126,7 +148,7 @@ impl Write for AlignedWriter {
             total_written += to_copy;
 
             // Flush if buffer is full
-            if self.buffer_pos == DEFAULT_BUFFER_SIZE {
+            if self.buffer_pos == cap {
                 self.flush_buffer()?;
             }
         }

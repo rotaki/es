@@ -50,6 +50,26 @@ impl AlignedReader {
         start_byte: u64,
         tracker: Option<IoStatsTracker>,
     ) -> io::Result<Self> {
+        Self::from_fd_with_buffer_size(fd, DEFAULT_BUFFER_SIZE, start_byte, tracker)
+    }
+
+    /// Create an AlignedReader with a caller-chosen internal buffer size.
+    /// `buffer_size` must be a non-zero multiple of `DIRECT_IO_ALIGNMENT` (512).
+    /// Used by callers that need to size the read block to a specific value
+    /// (e.g. Myung's Eq. 2 block-size rule `(M/T_merge)/R`).
+    pub fn from_fd_with_buffer_size(
+        fd: Arc<SharedFd>,
+        buffer_size: usize,
+        start_byte: u64,
+        tracker: Option<IoStatsTracker>,
+    ) -> io::Result<Self> {
+        if buffer_size == 0 || buffer_size % DIRECT_IO_ALIGNMENT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "buffer_size must be a non-zero multiple of DIRECT_IO_ALIGNMENT",
+            ));
+        }
+
         // Calculate aligned position and skip bytes
         let file_size = file_size_fd(fd.as_raw_fd()).map_err(io::Error::other)?;
         let aligned_pos = align_down(start_byte, DIRECT_IO_ALIGNMENT as u64);
@@ -57,7 +77,7 @@ impl AlignedReader {
 
         let mut reader = Self {
             fd,
-            buffer: AlignedBuffer::new(DEFAULT_BUFFER_SIZE, DIRECT_IO_ALIGNMENT)?,
+            buffer: AlignedBuffer::new(buffer_size, DIRECT_IO_ALIGNMENT)?,
             file_offset: aligned_pos,
             buffer_offset: 0,
             buffer_valid_len: 0,
@@ -80,6 +100,7 @@ impl AlignedReader {
     /// Otherwise, they are updated to reflect the new state
     fn refill_buffer(&mut self) -> io::Result<usize> {
         // Read aligned data from file using the raw file descriptor
+        let cap = self.buffer.capacity();
         let bytes_read = pread_fd(
             self.fd.as_raw_fd(),
             self.buffer.as_mut_slice(),
@@ -100,16 +121,14 @@ impl AlignedReader {
             self.buffer_offset = 0;
 
             // Handle case where we read less than buffer size (near EOF)
-            if bytes_read < DEFAULT_BUFFER_SIZE {
+            if bytes_read < cap {
                 // We've reached EOF - just round up to next alignment boundary
-                let next_aligned = align_up(
-                    (self.file_offset + bytes_read as u64) as usize,
-                    DEFAULT_BUFFER_SIZE,
-                ) as u64;
+                let next_aligned =
+                    align_up((self.file_offset + bytes_read as u64) as usize, cap) as u64;
                 self.file_offset = next_aligned;
             } else {
                 // Normal case - advance by buffer size
-                self.file_offset += DEFAULT_BUFFER_SIZE as u64;
+                self.file_offset += cap as u64;
             }
 
             Ok(bytes_read)
@@ -125,12 +144,13 @@ impl AlignedReader {
         self.logical_pos = clamped_pos;
 
         // For Direct I/O, we need to align the file offset
-        let aligned_pos = align_down(clamped_pos, DEFAULT_BUFFER_SIZE as u64);
-        let offset_in_block = offset_within_block(clamped_pos, DEFAULT_BUFFER_SIZE as u64);
+        let cap = self.buffer.capacity();
+        let aligned_pos = align_down(clamped_pos, cap as u64);
+        let offset_in_block = offset_within_block(clamped_pos, cap as u64);
 
         // If seeking within the current buffer, just adjust offset
-        if self.buffer_valid_len > 0 && self.file_offset >= DEFAULT_BUFFER_SIZE as u64 {
-            let current_buffer_start = self.file_offset - DEFAULT_BUFFER_SIZE as u64;
+        if self.buffer_valid_len > 0 && self.file_offset >= cap as u64 {
+            let current_buffer_start = self.file_offset - cap as u64;
             let current_buffer_end = current_buffer_start + self.buffer_valid_len as u64;
 
             if clamped_pos >= current_buffer_start && clamped_pos < current_buffer_end {
