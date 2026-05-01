@@ -1109,3 +1109,34 @@ pub fn cmp_key_run_offset(
         ord => ord,
     }
 }
+
+/// Visibility-only constructors for offline benchmarking. Wraps the private
+/// `MultiSparseIndexes::from_segments` so external benches can build the same
+/// logical view used in production. Gated behind `internal-bench`.
+#[cfg(feature = "internal-bench")]
+pub mod bench_api {
+    use super::{MultiSparseIndexes, SparseIndexSegment};
+    use crate::sort::core::sparse_index::SparseIndex;
+
+    /// Build a `MultiSparseIndexes` from a slice of
+    /// `(run_id, &SparseIndex, total_bytes_in_run)` tuples. The returned view
+    /// borrows the underlying `SparseIndex`es; the input slice itself may be
+    /// dropped after the call returns.
+    ///
+    /// This is the same logical view that `engine::merge_once_with_hooks`
+    /// builds via `hooks.sparse_indexes(run)` on each input run.
+    pub fn build_multi_sparse_indexes<'a>(
+        refs: &[(u32, &'a SparseIndex, usize)],
+    ) -> MultiSparseIndexes<'a> {
+        let segments = refs
+            .iter()
+            .map(|&(run_id, index, total_bytes)| SparseIndexSegment {
+                run_id,
+                index,
+                total_bytes,
+                base_bytes: 0,
+            })
+            .collect();
+        MultiSparseIndexes::from_segments(segments)
+    }
+}

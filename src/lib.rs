@@ -426,6 +426,9 @@ pub mod sort;
 pub mod sort_policy_sub;
 pub mod sort_stats;
 
+#[cfg(feature = "internal-bench")]
+pub mod internal_bench;
+
 use std::path::{Path, PathBuf};
 
 // Export the main types

@@ -2161,3 +2161,27 @@ mod tests {
         assert!((third - fourth).abs() < 1e-12);
     }
 }
+
+/// Visibility-only re-exports of the boundary-selection routines for offline
+/// benchmarking. Identity-forwarding wrappers; no behavior change versus the
+/// production code path. Gated behind the `internal-bench` feature.
+#[cfg(feature = "internal-bench")]
+pub mod bench_api {
+    use super::{KeyRunIdOffsetBound, MultiSparseIndexes};
+
+    /// See `engine::select_boundary_by_count`.
+    pub fn select_boundary_by_count(
+        indexes: &[MultiSparseIndexes<'_>],
+        target_count: usize,
+    ) -> Option<KeyRunIdOffsetBound> {
+        super::select_boundary_by_count(indexes, target_count)
+    }
+
+    /// See `engine::select_boundary_by_size`.
+    pub fn select_boundary_by_size(
+        indexes: &[MultiSparseIndexes<'_>],
+        target_bytes: usize,
+    ) -> Option<KeyRunIdOffsetBound> {
+        super::select_boundary_by_size(indexes, target_bytes)
+    }
+}

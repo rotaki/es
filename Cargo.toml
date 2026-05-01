@@ -22,6 +22,14 @@ clap = { version = "4.5.2", features = ["derive"] }
 # Use buffered I/O instead of direct I/O for AlignedReader/AlignedWriter.
 # Enable with: cargo build --features buffered_io
 buffered_io = []
+# Expose a small visibility surface for offline benchmarking of internal
+# sparse-index and partitioning machinery. No runtime behavior change; only
+# adds public re-export modules. Required by `examples/sparse_budget_sweep`.
+internal-bench = []
+
+[[example]]
+name = "sparse_budget_sweep"
+required-features = ["internal-bench"]
 
 [dev-dependencies]
 tempfile = "3.2"
