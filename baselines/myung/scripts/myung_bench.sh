@@ -15,7 +15,7 @@
 #       [interleave_floor_bytes] [num_runs_per_config]
 #
 # Env overrides (set any of these to fan out beyond the 1D memory sweep):
-#   MEM_MIB_LIST (space-separated)   default: "1024 2048 4096 8192 16384 32768"
+#   MEM_MIB_LIST (space-separated)   default: "1024 2048 4096 8192 16384 32768 49152"
 #                                    interpreted as cgroup hard cap (MiB)
 #   HEADROOM_FRAC                    default: 0.6   (app gets 60% of cgroup)
 #   THREADS_LIST (space-separated)   default: "16"
@@ -33,7 +33,7 @@ OUT_CSV="${3:?output csv path}"
 C_BYTES="${4:-65536}"
 RUNS="${5:-3}"
 
-MEM_MIB_LIST="${MEM_MIB_LIST:-1024 2048 4096 8192 16384 32768}"
+MEM_MIB_LIST="${MEM_MIB_LIST:-1024 2048 4096 8192 16384 32768 49152}"
 HEADROOM_FRAC="${HEADROOM_FRAC:-0.6}"
 THREADS_LIST="${THREADS_LIST:-16}"
 ARB_LIST="${ARB_LIST:-on}"
