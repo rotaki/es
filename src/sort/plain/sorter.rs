@@ -99,13 +99,12 @@ impl RunFormat for PlainRunFormat {
     >(
         scanner: crate::sort::core::engine::Scanner,
         sink: &mut S,
-        run_gen_mem: usize,
+        data_bytes: usize,
     ) -> crate::replacement_selection::ReplacementSelectionStats {
-        crate::replacement_selection::run_replacement_selection_mm(
-            scanner,
-            sink,
-            run_gen_mem.saturating_mul(95) / 100,
-        )
+        // `data_bytes` is the post-sparse-reserve heap budget; the engine
+        // already subtracted the sparse-index portion via the configured
+        // `sparse_index_fraction` (see `run_generation_with_hooks`).
+        crate::replacement_selection::run_replacement_selection_mm(scanner, sink, data_bytes)
     }
 
     fn set_sparse_index_bootstrap(

@@ -217,6 +217,7 @@ impl BenchmarkRunner {
             sorter.set_imbalance_factor(self.config.imbalance_factor);
             sorter.set_partition_type(self.config.partition_type);
             sorter.set_discard_final_output(self.config.discard_final_output);
+            sorter.set_sparse_index_fraction(self.config.sparse_index_fraction);
 
             sorter.sort(input)?
         } else {
@@ -230,6 +231,7 @@ impl BenchmarkRunner {
             sorter.set_imbalance_factor(self.config.imbalance_factor);
             sorter.set_partition_type(self.config.partition_type);
             sorter.set_discard_final_output(self.config.discard_final_output);
+            sorter.set_sparse_index_fraction(self.config.sparse_index_fraction);
 
             sorter.sort(input)?
         };

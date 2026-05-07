@@ -26,4 +26,7 @@ pub struct BenchmarkConfig {
     pub imbalance_factor: f64,
     pub partition_type: PartitionType,
     pub discard_final_output: bool,
+    /// Fraction of run-gen / merge memory reserved for sparse-index pages.
+    /// Default 0.05; pass through to `SorterCore::set_sparse_index_fraction`.
+    pub sparse_index_fraction: f64,
 }

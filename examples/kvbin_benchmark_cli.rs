@@ -111,6 +111,11 @@ struct Args {
     #[arg(long, default_value = "false")]
     discard_final_output: bool,
 
+    /// Fraction of run-gen / merge memory reserved for sparse-index pages.
+    /// The remainder is the data buffer.  Default 0.05 (= 5%).
+    #[arg(long, default_value = "0.05")]
+    sparse_index_fraction: f64,
+
     /// Only estimate dataset size (MB) and exit
     #[arg(long, default_value = "false")]
     estimate_size: bool,
@@ -239,6 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         imbalance_factor: args.imbalance_factor,
         partition_type,
         discard_final_output: args.discard_final_output,
+        sparse_index_fraction: args.sparse_index_fraction,
     };
 
     let input_provider = Box::new(input_provider);

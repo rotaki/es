@@ -129,6 +129,11 @@ struct Args {
     #[arg(long, default_value = "false")]
     discard_final_output: bool,
 
+    /// Fraction of run-gen / merge memory reserved for sparse-index pages.
+    /// The remainder is the data buffer.  Default 0.05 (= 5%).
+    #[arg(long, default_value = "0.05")]
+    sparse_index_fraction: f64,
+
     /// Key column indices (comma-separated)
     #[arg(short = 'k', long, default_value = "8,9,13,14,15")]
     key_columns: String,
@@ -314,6 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         imbalance_factor: args.imbalance_factor,
         partition_type,
         discard_final_output: args.discard_final_output,
+        sparse_index_fraction: args.sparse_index_fraction,
     };
 
     // Create benchmark runner

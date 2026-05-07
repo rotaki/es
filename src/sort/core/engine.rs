@@ -47,8 +47,23 @@ impl Default for PartitionType {
     }
 }
 
-const INDEX_BUDGET_PCT: usize = 5;
 const SPARSE_INDEX_WARN_AVG_ENTRIES_PER_RUN: f64 = 10.0;
+
+/// Bytes reserved for the sparse-index portion of a memory budget.
+/// Mirrors the run-gen side's old `total.saturating_mul(5).div_ceil(100)`
+/// rounding (ceiling) so default behavior stays bit-identical.
+fn sparse_index_bytes_run_gen(total: usize, fraction: f64) -> usize {
+    let raw = (total as f64 * fraction).ceil() as usize;
+    raw.min(total)
+}
+
+/// Bytes reserved for the sparse-index portion of a merge memory budget.
+/// Mirrors the merge side's old `total.saturating_mul(5) / 100` rounding
+/// (truncation) so default behavior stays bit-identical.
+fn sparse_index_bytes_merge(total: usize, fraction: f64) -> usize {
+    let raw = (total as f64 * fraction) as usize;
+    raw.min(total)
+}
 
 fn merge_memory_budget_bytes(num_threads: usize, fanin: usize) -> usize {
     num_threads
@@ -196,12 +211,14 @@ pub trait SortHooks: Clone + Send + Sync + 'static {
 
     fn into_output(&self, run: Self::MergeableRun, stats: SortStats) -> Box<dyn SortOutput>;
 
-    /// Run replacement selection for this sorter
+    /// Run replacement selection for this sorter.  `data_bytes` is the
+    /// post-sparse-reserve heap budget (the engine subtracts the sparse-index
+    /// portion via the configured `sparse_index_fraction` before calling).
     fn run_replacement_selection(
         &self,
         scanner: Scanner,
         sink: &mut Self::Sink,
-        run_gen_mem: usize,
+        data_bytes: usize,
     ) -> crate::replacement_selection::ReplacementSelectionStats;
 
     /// Set how many threads will read this run's sparse index.
@@ -226,6 +243,11 @@ pub struct SorterCore<H: SortHooks> {
     partition_type: PartitionType,
     temp_dir_info: Arc<TempDirInfo>,
     discard_final_output: bool,
+    /// Fraction of `run_gen_mem` (and per-merge memory) reserved for sparse
+    /// index pages; the remainder is the data buffer.  Default 0.05; CLIs
+    /// usually overwrite this via `set_sparse_index_fraction` from a
+    /// `BenchmarkConfig` field driven by `--sparse-index-fraction`.
+    sparse_index_fraction: f64,
 }
 
 impl<H: SortHooks> SorterCore<H> {
@@ -262,6 +284,7 @@ impl<H: SortHooks> SorterCore<H> {
                 should_delete: true,
             }),
             discard_final_output: false,
+            sparse_index_fraction: 0.05,
         }
     }
 
@@ -279,6 +302,12 @@ impl<H: SortHooks> SorterCore<H> {
 
     pub fn set_discard_final_output(&mut self, discard: bool) {
         self.discard_final_output = discard;
+    }
+
+    /// Override the fraction of run-gen / merge memory reserved for sparse
+    /// index pages.  Clamped to `[0.0, 1.0]`.  Default 0.05.
+    pub fn set_sparse_index_fraction(&mut self, fraction: f64) {
+        self.sparse_index_fraction = fraction.clamp(0.0, 1.0);
     }
 
     fn run_generation_indexing_interval(&self) -> IndexingInterval {
@@ -300,6 +329,7 @@ impl<H: SortHooks> SorterCore<H> {
             sort_input,
             self.run_gen_threads,
             self.run_gen_mem,
+            self.sparse_index_fraction,
             run_indexing_interval,
             estimated_total_data_bytes,
             self.temp_dir_info.as_ref().as_ref(),
@@ -313,7 +343,8 @@ impl<H: SortHooks> SorterCore<H> {
     ) -> Result<(H::MergeableRun, Vec<MergeStats>), String> {
         let total_data_bytes: usize = runs.iter().map(|run| run.total_bytes()).sum();
         let merge_memory_bytes = merge_memory_budget_bytes(self.merge_threads, self.merge_fanin);
-        let total_index_budget = merge_memory_bytes.saturating_mul(INDEX_BUDGET_PCT) / 100;
+        let total_index_budget =
+            sparse_index_bytes_merge(merge_memory_bytes, self.sparse_index_fraction);
         let threads = self.merge_threads.max(1);
         let thread_index_budget = total_index_budget.div_ceil(threads);
         let estimated_thread_data_bytes = total_data_bytes.div_ceil(threads);
@@ -354,6 +385,7 @@ impl<H: SortHooks> SorterCore<H> {
             sort_input,
             num_threads,
             run_gen_mem,
+            0.05,
             IndexingInterval::records(run_indexing_interval),
             None,
             dir,
@@ -373,7 +405,7 @@ impl<H: SortHooks> SorterCore<H> {
     {
         let total_data_bytes: usize = runs.iter().map(|run| run.total_bytes()).sum();
         let merge_memory_bytes = merge_memory_budget_bytes(num_threads, fanin);
-        let total_index_budget = merge_memory_bytes.saturating_mul(INDEX_BUDGET_PCT) / 100;
+        let total_index_budget = sparse_index_bytes_merge(merge_memory_bytes, 0.05);
         let threads = num_threads.max(1);
         let thread_index_budget = total_index_budget.div_ceil(threads);
         let estimated_thread_data_bytes = total_data_bytes.div_ceil(threads);
@@ -448,6 +480,7 @@ fn run_generation_with_hooks<H: SortHooks>(
     sort_input: Box<dyn SortInput>,
     num_threads: usize,
     run_gen_mem: usize,
+    sparse_index_fraction: f64,
     run_indexing_interval: IndexingInterval,
     estimated_total_data_bytes: Option<usize>,
     dir: impl AsRef<Path>,
@@ -456,7 +489,11 @@ fn run_generation_with_hooks<H: SortHooks>(
     let hooks = hooks.clone();
     let worker_hooks = hooks.clone();
     let worker_count = num_threads.max(1);
-    let thread_index_budget = run_gen_mem.saturating_mul(INDEX_BUDGET_PCT).div_ceil(100);
+    let thread_index_budget = sparse_index_bytes_run_gen(run_gen_mem, sparse_index_fraction);
+    // Data buffer = total per-thread budget minus the sparse-index reserve.
+    // The trait impl receives this and uses it directly as the heap memory
+    // limit (no further shrink — this function is the single split point).
+    let run_gen_data_bytes = run_gen_mem.saturating_sub(thread_index_budget);
     let estimated_thread_data_bytes =
         estimated_total_data_bytes.map(|value| value.div_ceil(worker_count));
 
@@ -475,7 +512,7 @@ fn run_generation_with_hooks<H: SortHooks>(
             }
             let mut sink = worker_hooks.create_sink(run_writer, thread_interval);
             let thread_start = Instant::now();
-            let _ = worker_hooks.run_replacement_selection(scanner, &mut sink, run_gen_mem);
+            let _ = worker_hooks.run_replacement_selection(scanner, &mut sink, run_gen_data_bytes);
             let local_runs = sink.finalize();
             let total_time_ms = thread_start.elapsed().as_millis();
             println!(

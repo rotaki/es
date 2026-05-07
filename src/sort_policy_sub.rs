@@ -33,8 +33,11 @@ pub struct PlannerConfig {
     /// Fraction of memory reserved for sparse-index overhead on the merge side.
     /// Applied after rho scaling to merge-effective memory only:
     /// M_merge = (rho × M) × (1 − sparse_index_fraction).
-    /// Run generation uses M_run_gen = rho × M, because the runtime already
-    /// applies its own 0.95 run-generation budget split.
+    /// Run generation uses M_run_gen = rho × M; the sort runtime applies the
+    /// same fraction internally on the run-gen side via its own
+    /// `sparse_index_fraction` setting (`SorterCore::set_sparse_index_fraction`).
+    /// For consistency, planner-driven configurations should pass the same
+    /// value to both.
     /// (default: 0.05)
     pub sparse_index_fraction: f64,
     /// Minimum per-thread run-generation buffer target (MB).

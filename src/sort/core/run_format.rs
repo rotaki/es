@@ -148,11 +148,15 @@ pub trait RunFormat: Clone + Send + Sync + 'static {
         usize::MAX
     }
 
-    /// Run replacement selection for this format
+    /// Run replacement selection for this format.  `data_bytes` is the
+    /// post-sparse-reserve heap budget — the engine subtracts the sparse-index
+    /// portion (see [`SorterCore::set_sparse_index_fraction`]) before
+    /// dispatching here, so impls should pass it straight to the inner
+    /// algorithm without further shrinking.
     fn run_replacement_selection<S: RunSink<MergeableRun = MergeableRun<Self>>>(
         scanner: Scanner,
         sink: &mut S,
-        run_size: usize,
+        data_bytes: usize,
     ) -> crate::replacement_selection::ReplacementSelectionStats;
 }
 
@@ -1038,9 +1042,9 @@ impl<F: RunFormat> SortHooks for FormatSortHooks<F> {
         &self,
         scanner: Scanner,
         sink: &mut Self::Sink,
-        run_size: usize,
+        data_bytes: usize,
     ) -> crate::replacement_selection::ReplacementSelectionStats {
-        F::run_replacement_selection(scanner, sink, run_size)
+        F::run_replacement_selection(scanner, sink, data_bytes)
     }
 
     fn set_sparse_index_readers(&self, run: &Self::MergeableRun, count: usize) {
