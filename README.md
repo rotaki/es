@@ -1,4 +1,4 @@
-# es — external sort
+# CrocSort — Resource-Efficient, Skew-Resilient Parallel External Merge Sort
 
 This README documents how a sort run's configuration (thread counts,
 per-thread buffer sizes, merge fan-in, sparse-index reserve) is determined
