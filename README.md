@@ -179,5 +179,5 @@ The KVBin script iterates `{freq_key, heavy_key} × {key-only, count-balanced, s
 
 - Linux x86_64 (Linux-only because of `systemd-run` user-scope cgroup enforcement; non-Linux silently falls back to no cgroup).
 - Rust toolchain that builds edition 2024 (≥ 1.85).
-- `bc`, `tee`, `ps`, `du`, `wget`, optionally `rclone`, optionally `/usr/local/sbin/clearcache3.sh`.
-- ≥ 256 GiB free disk; ≥ 48 GiB RAM for the full cgroup sweep (drop the largest sizes for smaller machines).
+- `bc`, `tee`, `ps`, `du`, `wget`, optionally `rclone`.
+- ≥ 1TB free disk; ≥ 64 GiB RAM for the full cgroup sweep.
